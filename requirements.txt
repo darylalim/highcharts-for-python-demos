@@ -1,2 +1,4 @@
 highcharts-core>=1.10.3
+highcharts-gantt>=1.7.0
+highcharts-stock>=1.7.0
 jupyterlab>=4.4.1
