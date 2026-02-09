@@ -5,27 +5,15 @@ Demonstrations of data visualizations using the Highcharts for Python toolkit.
 - [Get started](#get-started)
 
 ## Installation
-Create a virtual environment:
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management. Install dependencies:
 
 ```bash
-python3 -m venv highcharts_env
-```
-
-Activate the virtual environment:
-
-```bash
-source highcharts_env/bin/activate
-```
-
-Install packages in the `requirements.txt` file:
-
-```bash
-pip install -r requirements.txt
+uv sync
 ```
 
 ## Get started
 Run Jupyter notebook examples in JupyterLab:
 
 ```bash
-jupyter lab 
+uv run jupyter lab
 ```
