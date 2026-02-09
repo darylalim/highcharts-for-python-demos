@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "highcharts-for-python-demos"
+version = "0.1.0"
+description = "Jupyter notebook demos for the Highcharts for Python toolkit"
+requires-python = ">=3.12"
+dependencies = [
+    "highcharts-core>=1.10.3",
+    "highcharts-gantt>=1.7.0",
+    "highcharts-stock>=1.7.0",
+    "jupyterlab>=4.4.1",
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "ty",
+    "pytest",
+]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
