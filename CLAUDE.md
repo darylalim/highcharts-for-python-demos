@@ -1,83 +1,67 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Overview
 
 Jupyter notebook demos for the Highcharts for Python toolkit. Each `.ipynb` file is a self-contained example of a specific chart type.
-
-## Setup
-
-```bash
-uv sync
-uv run jupyter lab
-```
-
-## Commands
-
-These apply when Python source files (`.py`) are added to the project:
-
-```bash
-ruff check .    # lint
-ruff format .   # format
-ty check .      # type check
-pytest          # run all tests
-pytest tests/path/test_file.py::test_name  # run single test
-```
-
-## Code Style
-
-These apply when Python source files (`.py`) are added to the project:
-
-- `snake_case` for functions/variables, `PascalCase` for classes
-- Type annotations on all parameters and returns
-- isort with combine-as-imports (configured in `pyproject.toml`)
-- Use dataclasses and abstract base classes
-
-## Dependencies
-
-- `highcharts-core` — Python wrapper for core Highcharts JS charting library
-- `highcharts-stock` — Python wrapper for Highcharts Stock (financial/time-series charts)
-- `highcharts-gantt` — Python wrapper for Highcharts Gantt (project timeline charts)
-- `jupyterlab` — notebook runtime environment
-- `requests` — HTTP client used by some stock demos to fetch external data
-
-## Configuration
-
-`pyproject.toml` is the central config file for:
-
-- **Project metadata and dependencies** — `[project]` section (managed by `uv`)
-- **Ruff** — `[tool.ruff]` for linting rules and `[tool.ruff.format]` for formatting
-- **isort** — `[tool.ruff.lint.isort]` with `combine-as-imports = true`
-- **pytest** — `[tool.pytest.ini_options]` for test configuration
 
 ## Architecture
 
 Notebooks are organized by Highcharts product, then by chart category:
 
 - `highcharts-core/` — line, area, column/bar, pie, heat/tree maps, trees/networks, other
-- `highcharts-stock/` — candlestick, OHLC, HLC, and other financial charts
+- `highcharts-stock/` — candlestick, OHLC, HLC, heikin-ashi, and other financial charts
 - `highcharts-gantt/` — Gantt/project timeline charts
 
 ### Notebook structure
 
-Every notebook follows the same cell pattern:
+Every notebook follows the same cell pattern — each step is an H2 markdown cell followed by a code cell:
 
-1. **Title & description** — chart name and one-line summary
-2. **Import Dependencies** — imports from the appropriate `highcharts_*` package
-3. **Retrieve Data** (optional) — fetches external data via `requests` (some stock demos)
-4. **Configure Options** — chart config as either:
-   - `options_as_str`: JS literal string parsed via `HighchartsOptions.from_js_literal()` (most core demos)
-   - `options_as_dict`: Python dict passed to `Chart.from_options()` (stock and gantt demos)
-5. **Assemble Chart and Options** — creates the `Chart` object
-6. **Render Visualization** — calls `chart.display()`
+1. `# <Chart Name>` — title and one-line description
+2. `## Import Dependencies` — imports from the appropriate `highcharts_*` package
+3. `## Retrieve Data` (optional) — fetches external data via `requests`
+4. `## Prepare Data` (optional) — transforms fetched or inline data
+5. `## Configure Options` — chart config as either:
+   - `options_as_str` — JS literal string (many core demos)
+   - `options_as_dict` — Python dict (some core demos, all stock and gantt demos)
+6. `## Assemble Chart and Options` — creates the `Chart` object
+7. `## Render Visualization` — calls `chart.display()`
 
-### Key API patterns
+Some notebooks add extra sections (e.g., `## Add Technical Indicators`, `## Add Series`) or combine assembly and render into `## Assemble and Display Chart`.
 
-- **highcharts-core**: imports from `highcharts_core.chart`, `highcharts_core.options`
-- **highcharts-stock**: imports from `highcharts_stock.chart`; set `chart.is_stock_chart = True`
-- **highcharts-gantt**: imports from `highcharts_gantt.chart`; pass `chart_kwargs={'is_gantt_chart': True}` to `Chart.from_options()`
-- **Technical indicators** (stock only): `series.add_indicator(chart, 'indicator_name', indicator_kwargs={...})`
+### API patterns
+
+**highcharts-core** — imports from `highcharts_core.chart` and `highcharts_core.options`:
+
+```python
+options = HighchartsOptions.from_js_literal(options_as_str)  # or .from_dict(options_as_dict)
+chart = Chart.from_options(options)
+```
+
+**highcharts-stock** — imports from `highcharts_stock.chart`; passes dict directly to `Chart.from_options()` without a `HighchartsOptions` intermediate:
+
+```python
+chart = Chart.from_options(options_as_dict)
+chart.is_stock_chart = True  # only when stock chart mode is explicitly needed
+```
+
+**highcharts-gantt** — imports from `highcharts_gantt.chart`:
+
+```python
+chart = Chart.from_options(options_as_dict, chart_kwargs={'is_gantt_chart': True})
+```
+
+**Technical indicators** (stock only) — returns the updated chart:
+
+```python
+chart = chart.options.series[0].add_indicator(chart, 'macd', indicator_kwargs={'y_axis': 1})
+```
+
+**Data fetching** (stock only) — passes raw JSON string as the series `data` value:
+
+```python
+stock_response = requests.get('https://demo-live-data.highcharts.com/aapl-ohlcv.json')
+stock_data = stock_response.text
+```
 
 ## Conventions
 
