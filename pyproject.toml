@@ -12,24 +12,5 @@ dependencies = [
     "highcharts-gantt>=1.7.0",
     "highcharts-stock>=1.7.0",
     "jupyterlab>=4.4.1",
-    "requests",
+    "requests>=2.32.0",
 ]
-
-[project.optional-dependencies]
-dev = [
-    "ruff",
-    "ty",
-    "pytest",
-]
-
-[tool.ruff]
-target-version = "py312"
-
-[tool.ruff.lint]
-select = ["E", "F", "I"]
-
-[tool.ruff.lint.isort]
-combine-as-imports = true
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
