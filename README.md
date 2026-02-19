@@ -1,19 +1,28 @@
 # Highcharts for Python Demos
-Demonstrations of data visualizations using the Highcharts for Python toolkit.
 
-- [Installation](#installation)
-- [Get started](#get-started)
+Jupyter notebook demos for the [Highcharts for Python](https://github.com/highcharts-for-python) toolkit. Each `.ipynb` file is a self-contained example of a specific chart type.
 
-## Installation
-This project uses [uv](https://docs.astral.sh/uv/) for dependency management. Install dependencies:
+## Setup
+
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 
 ```bash
 uv sync
-```
-
-## Get started
-Run Jupyter notebook examples in JupyterLab:
-
-```bash
 uv run jupyter lab
 ```
+
+## Project Structure
+
+Notebooks are organized by Highcharts product, then by chart category:
+
+- `highcharts-core/` — line, area, column/bar, pie, heat/tree maps, trees/networks, other
+- `highcharts-stock/` — candlestick, OHLC, HLC, heikin-ashi, and other financial charts
+- `highcharts-gantt/` — Gantt/project timeline charts
+
+## Dependencies
+
+- `highcharts-core` — core Highcharts JS charting library
+- `highcharts-stock` — Highcharts Stock (financial/time-series charts)
+- `highcharts-gantt` — Highcharts Gantt (project timeline charts)
+- `jupyterlab` — notebook runtime
+- `requests` — HTTP client for fetching external data in some stock demos
