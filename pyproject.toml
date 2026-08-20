@@ -40,14 +40,23 @@ dependencies = [
 # edit, pytest on stop), not just CI — see CLAUDE.md > Hooks.
 dev = [
     "pytest>=8.0",
-    "ruff==0.15.17",
-    # 0.0.61, not 0.0.49: on 0.0.49 `ty check` was OOM-killed (SIGKILL, ~5 min) on
+    "ruff==0.16.4",
+    # Never below 0.0.61: on 0.0.49 `ty check` was OOM-killed (SIGKILL, ~5 min) on
     # streamlit_app.py's chart-type label chain. Its cost grew super-linearly in the
     # branch count, and the dumbbell type's branch — the 14th of 18 — crossed the
     # cliff, so the CI gate died with no diagnostics from b614f7c onward. Removing any
-    # one branch fixed it; declaring the tuple's types did not. Fixed upstream: 0.0.61
-    # checks the same tree in ~1s. Do not lower this pin without re-timing the gate.
-    "ty==0.0.61",
+    # one branch fixed it; declaring the tuple's types did not. Fixed upstream in
+    # 0.0.61, which checked the same tree in ~1s; 0.0.73 checks it in ~0.25s.
+    #
+    # RE-TIME THE GATE ON EVERY BUMP of this pin, upward as well as down: the
+    # regression was a PERFORMANCE one, so nothing announces its return — a
+    # reintroduced cliff emits no diagnostic, it simply stops finishing. Timing alone
+    # is not enough either. Confirm the checker is still doing the work by deleting
+    # one of the inline `# ty: ignore[...]` suppressions and watching the error come
+    # back, which also proves that rule name still exists upstream: a renamed or
+    # removed rule leaves a suppression that silences nothing and a gate that passes
+    # for the wrong reason.
+    "ty==0.0.73",
     "watchdog>=6.0.0",
 ]
 
@@ -68,8 +77,17 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 ignore = ["E501"]
 
 [tool.ruff.format]
-# Defaults are correct (line length 88, double quotes). Table kept as an
-# explicit anchor for any future formatter settings.
+# Defaults are correct (line length 88, double quotes) — and as of Ruff 0.16 the
+# defaults also decide WHICH FILES the formatter walks. It now formats Python code
+# blocks in Markdown (```python / py / py3 / pyi / pycon fences) by default, so
+# `ruff format --check .` covers CLAUDE.md and docs/chart-types.md alongside the
+# .py tree. Kept deliberately (no `extend-exclude = ["*.md"]`): it drift-proofs
+# those two files' API examples for free, which nothing else did.
+#
+# It is the one gate the hooks do NOT mirror. `post_edit_py.py` fires on
+# `is_python_target`, i.e. `p.suffix == ".py"`, so a malformed fence in a .md file
+# surfaces in CI and not on save — run `uv run ruff format --check .` by hand after
+# editing one. Table kept as an explicit anchor for any future formatter settings.
 
 [tool.ty]
 # Defaults are a good baseline: ty infers the py312 target from requires-python

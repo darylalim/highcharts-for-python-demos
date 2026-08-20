@@ -9992,7 +9992,7 @@ def test_app_static_png_mode_executes_the_cached_png_wrapper(app, monkeypatch):
         f"path would silently ignore those columns"
     )
     # The bytes reached the PAGE, not merely the wrapper's return. `st.image` decodes
-    # through PIL, so a rendered `imgs` element is itself proof that valid image bytes
+    # through PIL, so a rendered `image` element is itself proof that valid image bytes
     # arrived — a truncated or corrupted payload raises "cannot identify image file" and
     # surfaces as `app.exception` above. (That is not hypothetical: this test was first
     # written with a `b"not-a-png"` stand-in and failed exactly that way, which is why
@@ -10003,7 +10003,17 @@ def test_app_static_png_mode_executes_the_cached_png_wrapper(app, monkeypatch):
     # URLs whose hash is salted with filename and mimetype rather than being a digest of
     # the content, and `st.image` re-encodes to .jpg besides — so matching bytes would
     # mean reaching into private media-manager API for no guarantee this does not give.
-    assert len(app.get("imgs")) == 1, "the PNG never reached st.image"
+    #
+    # `app.image`, not `app.get("imgs")`: Streamlit 1.59.0 gave `st.image` a first-class
+    # AppTest node (`testing.v1.element_tree.Image`, and the `.image` accessor with it),
+    # and that node reports `type == "image"` where the untyped element it replaced
+    # reported the PROTO field name, `imgs`. The proto still spells it `imgs` — only the
+    # harness's name for it moved — so the old lookup did not raise on the 1.58 -> 1.62
+    # bump, it silently returned an EMPTY list, and this assertion is what caught it. A
+    # lookup keyed on element TYPE is the one thing this file's find-by-LABEL convention
+    # cannot protect: a renamed label fails loudly at `.set_value`, a renamed type reads
+    # as "the element is not there".
+    assert len(app.image) == 1, "the PNG never reached st.image"
     downloads = app.get("download_button")
     assert len(downloads) == 1 and downloads[0].proto.url.endswith(".png"), (
         "the Static PNG branch did not offer its bytes as a .png download"
