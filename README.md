@@ -3,7 +3,7 @@
 [![CI](https://github.com/darylalim/highcharts-studio/actions/workflows/ci.yml/badge.svg)](https://github.com/darylalim/highcharts-studio/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
-[![Streamlit 1.57+](https://img.shields.io/badge/streamlit-1.57%2B-ff4b4b.svg)](https://streamlit.io)
+[![Streamlit 1.59+](https://img.shields.io/badge/streamlit-1.59%2B-ff4b4b.svg)](https://streamlit.io)
 
 A [Streamlit](https://streamlit.io) application for building data visualizations
 with [Highcharts](https://github.com/highcharts-for-python) — **every chart is

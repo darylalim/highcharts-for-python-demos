@@ -16,7 +16,7 @@ description = "Streamlit application for building data visualizations with Highc
 license = "MIT"
 license-files = ["LICENSE", "NOTICE"]
 # The README header badges advertise these version floors — "Python 3.12+"
-# mirrors requires-python, "Streamlit 1.57+" the streamlit floor below — so
+# mirrors requires-python, "Streamlit 1.59+" the streamlit floor below — so
 # test_readme_badges_stay_in_sync_with_project pins each badge to them (a bump
 # here that leaves a badge stale fails that test).
 requires-python = ">=3.12"
@@ -28,11 +28,19 @@ dependencies = [
     # st.multiselect, st.toggle, st.segmented_control, st.context.theme,
     # width/height="stretch", bordered st.metric KPI cards in an
     # st.container(horizontal=True) row, and the [theme.light]/[theme.dark]
-    # split themes in .streamlit/config.toml). The 1.57.0 floor already covers
-    # them all — the most recent are the [theme.light]/[theme.dark] split
-    # (1.51.0) and the 1.48.0 layout APIs (horizontal flex containers,
-    # container height="stretch"); st.context.theme landed in 1.46.0.
-    "streamlit>=1.57.0",
+    # split themes in .streamlit/config.toml). The most recent of those is the
+    # [theme.light]/[theme.dark] split (1.51.0), then the 1.48.0 layout APIs
+    # (horizontal flex containers, container height="stretch");
+    # st.context.theme landed in 1.46.0 — so the APP alone would floor at 1.51.0.
+    #
+    # The floor is 1.59.0 because the TEST HARNESS outranks the app here: 1.59.0
+    # gave st.image a first-class AppTest node, and tests/test_smoke.py's Static
+    # PNG test reads it as `app.image` (before 1.59.0 that attribute does not
+    # exist and the test dies with AttributeError). The floor is stated once, for
+    # the whole project, so it has to cover the strictest consumer — and a floor
+    # that installs cleanly but cannot run the suite is not a floor. Confirmed by
+    # `uv lock --resolution lowest-direct`, which picked 1.57.0 before this bump.
+    "streamlit>=1.59.0",
 ]
 
 [dependency-groups]
