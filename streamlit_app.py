@@ -171,7 +171,6 @@ def cached_chart_html(
     y_cols,
     height,
     title,
-    dark,
     size_col,
     target_col,
     parent_col,
@@ -191,7 +190,6 @@ def cached_chart_html(
         list(y_cols),
         height=height,
         title=title,
-        dark=dark,
         size_col=size_col,
         target_col=target_col,
         parent_col=parent_col,
@@ -216,7 +214,6 @@ def cached_chart_png(
     y_cols,
     height,
     title,
-    dark,
     size_col,
     target_col,
     parent_col,
@@ -236,7 +233,6 @@ def cached_chart_png(
         list(y_cols),
         height=height,
         title=title,
-        dark=dark,
         size_col=size_col,
         target_col=target_col,
         parent_col=parent_col,
@@ -258,7 +254,6 @@ def cached_chart_js(
     x_col,
     y_cols,
     title,
-    dark,
     size_col,
     target_col,
     parent_col,
@@ -279,7 +274,6 @@ def cached_chart_js(
         x_col,
         list(y_cols),
         title=title,
-        dark=dark,
         size_col=size_col,
         target_col=target_col,
         parent_col=parent_col,
@@ -1176,15 +1170,17 @@ with left.container(border=True, height="stretch"):
         )
         st.badge(badge_label, icon=badge_icon, color=badge_color)
 
-    # The chart renders in an iframe / server PNG that the shell theme can't
-    # reach, so read the active light/dark mode and let the builder flip the
-    # chart's chrome to match. `dark` is part of every renderer's cache key, so
-    # each mode caches independently. Initial load matches the chart to the shell;
-    # a *manual* mid-session theme switch is applied frontend-side without a Python
-    # rerun, so the chart catches up on the next interaction. The defensive getattr
-    # keeps this working under AppTest, where st.context has no theme.
-    _theme = getattr(st.context, "theme", None)
-    dark = getattr(_theme, "type", "light") == "dark"
+    # No theme is read here, and that is the decision rather than an omission. The builder
+    # has no `dark` flag any more: .streamlit/config.toml is a single [theme], so every
+    # viewer resolves to the dark shell and a light chart could only ever be a mismatch.
+    # Deriving a flag from st.context.theme.type would now be theatre — one branch that
+    # cannot vary, plus a cache key that cannot vary with it.
+    #
+    # What that trades away is self-correction: the chart's chrome no longer FOLLOWS the
+    # shell, it assumes it. Restoring [theme.light]/[theme.dark] would put dark charts on a
+    # light shell with nothing at runtime objecting, which is why
+    # test_app_theme_is_a_single_mode_with_no_light_dark_toggle is load-bearing rather than
+    # tidy: it is the only thing standing between that edit and a silently wrong render.
 
     if render_mode == MODE_STATIC:
         # Server-side render: no Highcharts JS runs in the browser.
@@ -1196,7 +1192,6 @@ with left.container(border=True, height="stretch"):
                 tuple(y_cols),
                 height,
                 title,
-                dark,
                 size_col=size_col,
                 target_col=target_col,
                 parent_col=parent_col,
@@ -1239,7 +1234,6 @@ with left.container(border=True, height="stretch"):
             tuple(y_cols),
             height,
             title,
-            dark,
             size_col=size_col,
             target_col=target_col,
             parent_col=parent_col,
@@ -1275,7 +1269,6 @@ with left.container(border=True, height="stretch"):
             x_col,
             tuple(y_cols),
             title,
-            dark,
             size_col=size_col,
             target_col=target_col,
             parent_col=parent_col,

@@ -454,43 +454,71 @@ UNWEIGHTED_NODE_LINK_TYPES = NETWORKGRAPH_TYPES + ORGANIZATION_TYPES
 
 # Default series palette, applied to every chart so both render modes (iframe
 # and static PNG) share one look that matches the Streamlit theme in
-# .streamlit/config.toml. It leads with the config's LIGHT-mode primaryColor and
-# is shared across light and dark (only the chart chrome flips — see _themed), so
-# a series keeps its color when the viewer toggles the theme. The iframe and PNG
-# paths have no theme CSS, so they rely on this palette.
+# .streamlit/config.toml. It is that theme's `chartCategoricalColors` copied by hand:
+# Streamlit applies those to its own Vega/Plotly charts, and this app has none — every
+# chart is Highcharts, in an iframe or a server-side PNG that no theme CSS reaches — so
+# the palette has to be restated here. The copy is guarded mechanically by
+# test_theme_colors_stay_in_sync_with_config, not by this comment.
+#
+# The ORDER carries meaning that the hues alone do not, and three constants below read
+# it by index: 0 is the brand primary, 1 the green a waterfall rise takes, 3 the red a
+# fall and a boxplot outlier take. Reordering the config list repaints those.
+#
+# Index 6 is the one entry that does NOT match the upstream financial-dashboard template,
+# and config.toml carries the argument: the template's gray there is also its `grayColor`,
+# which _DARK_CHROME["muted"] copies, so series 7 was drawn in the axis-label colour at
+# 1.00:1. It is pink here instead. test_no_series_colour_collides_with_the_chart_chrome
+# is what keeps that class of collision from coming back through a future theme.
+#
+# The palette is applied to every chart, and there is no second mode to keep it consistent
+# ACROSS any more: the config is a single [theme], so `_themed` applies `_DARK_CHROME`
+# unconditionally. These hues are therefore read against the slate background and nothing
+# else — which is the whole reason a light mode could not be left nominally supported, since
+# on white they run 1.67–2.77:1.
 DEFAULT_COLORS = (
-    "#2563eb",  # blue (matches config.toml primaryColor)
-    "#16a34a",  # green
-    "#f59e0b",  # amber
-    "#dc2626",  # red
-    "#7c3aed",  # violet
-    "#0891b2",  # cyan
-    "#db2777",  # pink
-    "#65a30d",  # lime
+    "#60a5fa",  # blue (== config.toml primaryColor)
+    "#34d399",  # green
+    "#a78bfa",  # violet
+    "#f87171",  # red
+    "#fbbf24",  # yellow
+    "#38bdf8",  # sky
+    "#f472b6",  # pink (see config.toml: the ONE deviation from the template)
+    "#fb923c",  # orange
 )
 
 # Chart "chrome" (backgrounds, text, axes, gridlines, tooltip) for dark mode. The series
 # palette (DEFAULT_COLORS) is shared across modes — only this chrome flips — so a
-# series keeps its color when the viewer toggles the theme. Keep "bg"/"text" in
-# sync with backgroundColor/textColor in .streamlit/config.toml [theme.dark]; the
-# light path is left as Highcharts' defaults, which already match the light shell.
+# series keeps its color between them. Four of the five are the config's own theme values
+# under different names, kept in sync by the same test as the palette; only "axis" is
+# this module's alone, having no counterpart in a Streamlit theme.
+#
+# Coincidence worth stating so nobody "de-duplicates" it: "text" equals _HEATMAP_NULL
+# (and so _GAUGE_TRACK_COLOR) by value and NOT by meaning. They cannot collide in one
+# options dict — _themed flips both of those to "grid" in dark mode, and writes no text
+# color at all in light mode — but an alias would tie a dark-mode text color to a
+# light-mode fill, and a later edit to either would silently drag the other.
 _DARK_CHROME = {
-    "bg": "#0f172a",  # == config.toml [theme.dark] backgroundColor
-    "text": "#e2e8f0",  # titles, legend, pie labels (== dark textColor)
-    "muted": "#94a3b8",  # axis labels + titles
-    "grid": "#334155",  # y-axis gridlines
+    "bg": "#0f172a",  # == config.toml backgroundColor
+    "text": "#f1f5f9",  # titles, legend, pie labels (== textColor)
+    "muted": "#94a3b8",  # axis labels + titles (== grayColor)
+    "grid": "#334155",  # y-axis gridlines (== borderColor)
     "axis": "#475569",  # axis + tick lines
 }
 
 # Sequential colorAxis gradient for heatmap cell values — the one chart type that
 # colors by value, not by the categorical DEFAULT_COLORS series palette. The light
-# ramp is anchored on the brand primary (DEFAULT_COLORS[0]); the dark ramp keeps
-# the low end near the dark background and brightens the high end so cells stay
-# legible against _DARK_CHROME["bg"]. Missing cells use _HEATMAP_NULL, flipped to
-# _DARK_CHROME["grid"] in dark mode by _themed.
-_HEATMAP_GRADIENT = {"minColor": "#e0ecff", "maxColor": DEFAULT_COLORS[0]}
-_HEATMAP_GRADIENT_DARK = {"minColor": "#1e293b", "maxColor": "#60a5fa"}
-_HEATMAP_NULL = "#f1f5f9"
+# ramp is anchored on the brand primary (DEFAULT_COLORS[0]); the dark ramp's two
+# endpoints are drawn from the config theme's own `chartSequentialColors` scale, keeping
+# the low end dark enough to sit against _DARK_CHROME["bg"] and the high end bright
+# enough to stay legible on it. WHICH two stops is a legibility judgment settled by
+# rendering, so the test pins that both are ON that scale rather than pinning their
+# indices — the rule is what holds, not the choice. Missing cells use _HEATMAP_NULL,
+# flipped to _DARK_CHROME["grid"] in dark mode by _themed.
+_HEATMAP_GRADIENT = {"minColor": "#0c4a6e", "maxColor": "#7dd3fc"}
+# An empty cell. It is the gridline slate rather than a colour of its own, so a missing
+# reading reads as "no cell here" against the chart's own furniture instead of as a low
+# value on the ramp — which a pale fill at the ramp's cold end would.
+_HEATMAP_NULL = _DARK_CHROME["grid"]
 # Above this many cells, per-cell value labels overprint into noise, so they're
 # only drawn on smaller grids.
 _HEATMAP_DATALABEL_MAX_CELLS = 50
@@ -594,18 +622,44 @@ _SUNBURST_ROOT_LABEL = "All"
 # Left unset, Highcharts paints the root one of its OWN defaults — a cyan in no palette of
 # ours (verified by rendering). This slate reads against the white shell and _DARK_CHROME
 # alike, so like the series palette it needs no dark-mode flip.
-_SUNBURST_ROOT_COLOR = "#94a3b8"  # slate: the app's "not a category" grey
-# The GOAL crossbar's LIGHT-mode hue, flipped to the light text color by `_themed` — the one
-# `_themed` hook in this module that flips a MARK rather than chrome (see there for why it must
-# flip at all, and why no fixed value can work in principle). It is `_DARK_CHROME["bg"]` read the
-# other way round: the app's darkest slate, so the pair a bullet's crossbar swings between is
-# exactly the pair the app shell itself does, and neither can drift from the theme
-# (`_NEEDLE_PIVOT_COLOR = _SUNBURST_ROOT_COLOR`'s aliasing rule — no new colors invented here).
+#
+# It MOVED from slate-400 to slate-500 when DEFAULT_COLORS was repointed at the config
+# theme's `chartCategoricalColors`, because that list contains slate-400 at index 6 — so the
+# app's "not a category" grey had become a category, and a 7-series chart would have painted
+# one series in it. `test_sunburst_root_color_is_off_the_categorical_scale` is what caught
+# that, and since DEFAULT_COLORS is itself now pinned to the config, that test transitively
+# guards this constant against the THEME: swap in a palette containing this hue and it fails
+# again. Worth knowing before picking a replacement — the constraint is "outside the palette",
+# and the palette is no longer ours to choose.
+_SUNBURST_ROOT_COLOR = "#64748b"  # slate: the app's "not a category" grey
+# The GOAL crossbar's fill — the one place in this module a MARK, rather than chrome, takes a
+# theme colour (see `_BULLET_TARGET_BORDER_WIDTH` for why it needs a border as well, and why no
+# single value can work in principle). Aliased to the chrome rather than invented, so the pair the
+# crossbar is drawn from cannot drift from the pair the app shell uses
+# (`_NEEDLE_PIVOT_COLOR = _SUNBURST_ROOT_COLOR`'s rule — no new colors here).
 # Deliberately OFF the categorical palette, the _WATERFALL_SUM_COLOR / _SUNBURST_ROOT_COLOR
 # argument: a goal is not one of the categories, it is the line they are read AGAINST, so no
 # palette entry can say it — and a caller's custom `colors` must not repaint it into looking like
 # a series.
-_BULLET_TARGET_COLOR = _DARK_CHROME["bg"]  # slate-900: read against every bar
+_BULLET_TARGET_COLOR = _DARK_CHROME[
+    "text"
+]  # the fill; the border below carries the bar half
+_BULLET_TARGET_BORDER_COLOR = _DARK_CHROME["bg"]
+# The crossbar's DARK-mode border, and the reason it needs one at all. In light mode the
+# near-black fill above clears both backgrounds it crosses (17.9:1 on white, 7.0:1 on the
+# bar). In dark mode it cannot: clearing 3:1 against the slate background needs a relative
+# luminance >= 0.25, and against the palette blue needs <= 0.087, so NO single value exists
+# — the hook's "cannot work in principle" is literally true once the numbers are run, and it
+# is not a matter of picking a better hue. A mark spanning two backgrounds needs two values,
+# which is what a fill plus a border is. The light fill keeps 16.3:1 on the background; this
+# border carries the bar half at 7.0:1.
+#
+# A numeric key under `targetOptions` is exactly what the branch below warns about, so: this
+# is a module CONSTANT, never derived from a frame and never a column, so neither the
+# numpy.int64 rejection nor the `width = 0` EmptyValueError is reachable through it. The
+# warning there is about wiring GEOMETRY to data; the crossbar's 140% x 3px is still left
+# entirely alone.
+_BULLET_TARGET_BORDER_WIDTH = 1
 # The BEFORE marker's hue, and the whole of what makes a dumbbell directional. The AFTER marker and
 # the connector take `colors[0]` (the reading is the CURRENT state and the delta that reached it),
 # so the before needs a hue that is legible beside them without competing — and, being the state
@@ -630,7 +684,9 @@ _DUMBBELL_BEFORE_COLOR = _SUNBURST_ROOT_COLOR  # slate: the state that no longer
 #
 # (The default connector's colour is worth one line, because the render initially suggested
 # otherwise: at 1px it *photographs* as near-black, and reading the pixels would have "found" a
-# grey to fix. The DOM says `stroke: #2563eb` — the series hue, same as ours. Nothing to fix. A
+# grey to fix. The DOM says `stroke:` the SERIES HUE, whatever DEFAULT_COLORS[0] currently is —
+# ours already, so there is nothing to fix. (Quoted as a rule, not as the hex it read that day:
+# the palette has since been repointed at the config theme and the literal would now be wrong.) A
 # reminder that on this type the attribute is the evidence and the screenshot is not.)
 #
 # On a dumbbell the connector IS the mark — the reading is the delta, not either end — and at 1px
@@ -950,16 +1006,18 @@ _GAUGE_BAD_DIAL = (
 _LIGHT_COLOR_SCHEME_CSS = ".highcharts-root{color-scheme:only light}"
 
 
-def _themed(options: dict, *, dark: bool) -> dict:
-    """Inject dark-mode chrome into a Highcharts options ``dict``.
+def _themed(options: dict) -> dict:
+    """Inject the chart chrome into a Highcharts options ``dict``.
 
-    A no-op for light mode, so the light-mode output is byte-for-byte what it was
-    before dark mode existed. In dark mode it sets the chart background and the
-    title/legend/tooltip/axis/gridline colors to match the dark app shell, leaving
-    the series ``colors`` (``DEFAULT_COLORS``) untouched.
+    Sets the chart background and the title/legend/tooltip/axis/gridline colors to
+    match the app shell, leaving the series ``colors`` (``DEFAULT_COLORS``) untouched.
+
+    It used to take a ``dark`` flag and no-op for light mode. It does not any more:
+    ``.streamlit/config.toml`` is a single ``[theme]``, so every viewer gets the dark
+    shell and a light chart could only ever be a mismatch. Keeping the flag meant
+    shipping a mode nothing selected, whose palette was tuned for the other one — the
+    tests asserted its hexes, not its legibility, so "covered" did not mean "good".
     """
-    if not dark:
-        return options
     t = _DARK_CHROME
     options["chart"]["backgroundColor"] = t["bg"]
     options["title"] = {**options.get("title", {}), "style": {"color": t["text"]}}
@@ -1052,26 +1110,6 @@ def _themed(options: dict, *, dark: bool) -> dict:
         options.setdefault("plotOptions", {}).setdefault(bar_type, {})[
             "borderColor"
         ] = t["bg"]
-    if options["chart"].get("type") == "bullet":
-        # The GOAL crossbar's hue — bullet's second hook, and the only `_themed` hook in this
-        # module that flips a MARK rather than chrome. It exists because a bullet's target is the
-        # one mark here that necessarily crosses TWO backgrounds at once: Highcharts draws it at
-        # 140% of the bar width, so it spans both the bar (a constant palette blue in both themes)
-        # and the chart background (white -> slate). A fixed color therefore cannot work in
-        # PRINCIPLE, not merely in practice — a near-black reads on the light shell and disappears
-        # on the dark one, a near-white does the exact reverse, and both were rendered to check. So
-        # unlike every border dissolve above, which matches a mark TO the background, this hook
-        # matches it AGAINST the background, and it is the one `_themed` entry whose light-mode
-        # value is not a Highcharts default we leave alone but a color the branch had to set
-        # (`_BULLET_TARGET_COLOR`). Highcharts' `contrast` is no help: it computes against the fill
-        # a label sits on and is a dataLabel facility, while this is a shape.
-        #
-        # It INDEXES rather than `setdefault`s, and writes through a dict the branch emits as a
-        # fresh LITERAL rather than a shared module constant — so this cannot leak a dark color
-        # into every later light-mode chart in the same process, and a KeyError here would mean the
-        # branch changed underneath this hook (treemap's/waterfall's convention: the loud failure
-        # is wanted).
-        options["plotOptions"]["bullet"]["targetOptions"]["color"] = t["text"]
     if options["chart"].get("type") == "pie":
         pie = options["plotOptions"]["pie"]
         pie["dataLabels"] = {**pie.get("dataLabels", {}), "color": t["text"]}
@@ -1100,9 +1138,6 @@ def _themed(options: dict, *, dark: bool) -> dict:
         # them here: a dark-anchored ramp, muted labels, and an empty-cell
         # nullColor that reads against the dark background.
         color_axis = options["colorAxis"]
-        # Swap the whole gradient as one unit (mirroring the light side's
-        # dict(_HEATMAP_GRADIENT)) so the two can't drift if a key is ever added.
-        color_axis.update(_HEATMAP_GRADIENT_DARK)
         color_axis["labels"] = {
             **color_axis.get("labels", {}),
             "style": {"color": t["muted"]},
@@ -1114,7 +1149,6 @@ def _themed(options: dict, *, dark: bool) -> dict:
         # white while only the ticks flip.
         color_axis["gridLineColor"] = t["grid"]
         color_axis["tickColor"] = t["axis"]
-        options["plotOptions"]["heatmap"]["nullColor"] = t["grid"]
     node_link_type = options["chart"].get("type")
     if node_link_type in WEIGHTED_NODE_LINK_TYPES:
         # Only the node/link borders need flipping: they default to light and would
@@ -1164,26 +1198,6 @@ def _themed(options: dict, *, dark: bool) -> dict:
             **options["subtitle"],
             "style": {"color": t["muted"]},
         }
-    if options["chart"].get("type") in GAUGE_TYPES:
-        # The dial FACE — the solid gauge's unfilled ring tracks, the needle gauge's arc behind
-        # the ticks. The FIRST `_themed` hook to reach a TOP-LEVEL key rather than
-        # `plotOptions[type]`, and less an exception than a demonstration: a dial face is CHROME
-        # (the gauge's gridline; the colour of "no value here") that happens to belong to one
-        # family, so it lives on the pane, not on the series.
-        #
-        # It is the whole of BOTH types' dark-mode needs, for two different reasons. For the
-        # rings it is the ONLY hook available: `SolidGaugeSeries` models no border at any level
-        # and a plotOptions `borderColor` is silently dropped (boxplot's `fillColor`, exactly).
-        # For the needles it is the only one NEEDED: their axis — labels, ticks, line — is a real
-        # `yAxis` dict, so the generic axis loop above has already themed it, and the needles and
-        # their labels carry palette hues that read on both backgrounds. The pivot takes the
-        # off-palette slate that needs no flip either (`_NEEDLE_PIVOT_COLOR`).
-        #
-        # Left unset, a pane background takes a Highcharts default that `_LIGHT_COLOR_SCHEME_CSS`
-        # pins to its LIGHT resolution in BOTH themes — so every dial would sit on a glaring white
-        # rail against the dark shell (verified by rendering: a white arc, unmissable).
-        for face in options["pane"]["background"]:
-            face["backgroundColor"] = t["grid"]
     return options
 
 
@@ -2351,7 +2365,6 @@ def build_options(
     *,
     title: str | None = None,
     colors: list[str] | None = None,
-    dark: bool = False,
     size_col: str | None = None,
     target_col: str | None = None,
     parent_col: str | None = None,
@@ -2535,8 +2548,8 @@ def build_options(
       ``pane`` resolves); ``gauge`` pulls in ``highcharts-more`` from ``chart.type`` alone.
 
     ``colors`` overrides the series palette; it defaults to ``DEFAULT_COLORS``.
-    ``dark=True`` themes the chart chrome (background, text, axes, gridlines,
-    tooltip) for dark mode; the series palette itself is shared across modes.
+    The chart chrome (background, text, axes, gridlines, tooltip) is themed
+    unconditionally by ``_themed``; there is no mode flag.
     ``size_col`` names the marker-size column and is required for ``bubble``;
     ``target_col`` names the destination-node column and is required for all four
     node-link types (``sankey``, ``dependencywheel``, ``networkgraph`` and ``organization`` — the
@@ -2970,7 +2983,6 @@ def build_options(
                 },
                 "series": rings_out,
             },
-            dark=dark,
         )
 
     if (
@@ -3186,7 +3198,6 @@ def build_options(
                 },
                 "series": needles,
             },
-            dark=dark,
         )
 
     assert x_col is not None  # every other type NAMES its marks with it (guarded above)
@@ -3246,7 +3257,6 @@ def build_options(
                 },
                 "series": [{"name": value_col, "data": data}],
             },
-            dark=dark,
         )
 
     if chart_type in TREEMAP_TYPES:  # nested rectangles sized by value (like pie)
@@ -3297,7 +3307,6 @@ def build_options(
                 },
                 "series": [{"name": value_col, "data": data}],
             },
-            dark=dark,
         )
 
     if chart_type in FUNNEL_TYPES:  # part-of-whole stages (funnel / its mirror pyramid)
@@ -3362,7 +3371,6 @@ def build_options(
                 },
                 "series": [{"name": value_col, "data": data}],
             },
-            dark=dark,
         )
 
     if (
@@ -3461,7 +3469,6 @@ def build_options(
                 },
                 "series": [{"name": weight_col, "data": links}],
             },
-            dark=dark,
         )
 
     if (
@@ -3535,7 +3542,6 @@ def build_options(
                 },
                 "series": [{"name": f"{x_col} → {target_col}", "data": edges}],
             },
-            dark=dark,
         )
 
     if chart_type in ORGANIZATION_TYPES:  # an org chart: a titled reporting hierarchy
@@ -3615,7 +3621,6 @@ def build_options(
                 },
                 "series": [org_series],
             },
-            dark=dark,
         )
 
     if chart_type in XY_TYPES:  # scatter
@@ -3643,7 +3648,6 @@ def build_options(
                 "legend": {"enabled": len(series) > 1},
                 "series": series,
             },
-            dark=dark,
         )
 
     if chart_type in BUBBLE_TYPES:  # bubble: scatter plus a size (z) dimension
@@ -3690,7 +3694,6 @@ def build_options(
                 "legend": {"enabled": len(series) > 1},
                 "series": series,
             },
-            dark=dark,
         )
 
     if chart_type in HEATMAP_TYPES:  # an x-category × y-category value matrix
@@ -3754,7 +3757,6 @@ def build_options(
                 "plotOptions": {"heatmap": heatmap_opts},
                 "series": [{"name": "value", "data": cells}],
             },
-            dark=dark,
         )
 
     if chart_type in BOXPLOT_TYPES:  # per-category Tukey distributions
@@ -3857,7 +3859,6 @@ def build_options(
                 },
                 "series": series,
             },
-            dark=dark,
         )
 
     if chart_type in WATERFALL_TYPES:  # signed deltas floating at a running total
@@ -3933,7 +3934,6 @@ def build_options(
                 "plotOptions": {"waterfall": waterfall_opts},
                 "series": [{"name": value_col, "data": steps}],
             },
-            dark=dark,
         )
 
     if chart_type in SUNBURST_TYPES:  # a hierarchy drawn as concentric rings
@@ -4024,7 +4024,6 @@ def build_options(
                 "plotOptions": {"sunburst": sunburst_opts},
                 "series": [{"name": value_col, "data": points}],
             },
-            dark=dark,
         )
 
     if (
@@ -4127,7 +4126,6 @@ def build_options(
                 },
                 "series": [{"name": start_col, "data": points}],
             },
-            dark=dark,
         )
 
     if (
@@ -4190,7 +4188,6 @@ def build_options(
                 # name — is already on the X axis. There is nothing left to print in the mark.
                 "series": [{"name": f"{low_col}–{high_col}", "data": points}],
             },
-            dark=dark,
         )
 
     if (
@@ -4314,7 +4311,11 @@ def build_options(
                         #
                         # `color` is set for LIGHT mode here and FLIPPED in `_themed`; see the hook
                         # there for why a fixed value cannot work in principle.
-                        "targetOptions": {"color": _BULLET_TARGET_COLOR},
+                        "targetOptions": {
+                            "color": _BULLET_TARGET_COLOR,
+                            "borderColor": _BULLET_TARGET_BORDER_COLOR,
+                            "borderWidth": _BULLET_TARGET_BORDER_WIDTH,
+                        },
                         # No dataLabels, and no gate constant either — xrange's rule reached from
                         # xrange's premise, exactly as columnrange reached it. A bullet's bar
                         # stands on a real, ticked, gridlined y axis that renders in the Static PNG
@@ -4331,7 +4332,6 @@ def build_options(
                 # precedent, and NOT columnrange's paired `f"{low}–{high}"`.
                 "series": [{"name": measure_col, "data": points}],
             },
-            dark=dark,
         )
 
     if (
@@ -4419,7 +4419,6 @@ def build_options(
                 },
                 "series": [{"name": value_col, "data": points}],
             },
-            dark=dark,
         )
 
     if (
@@ -4515,7 +4514,6 @@ def build_options(
                 # two ends of a connector that is often shorter than the text.
                 "series": [{"name": f"{before_col}→{after_col}", "data": points}],
             },
-            dark=dark,
         )
 
     # cartesian (line/spline/area/areaspline/column/bar) and radar share the same
@@ -4546,7 +4544,6 @@ def build_options(
                 "legend": {"enabled": len(series) > 1},
                 "series": series,
             },
-            dark=dark,
         )
 
     return _themed(
@@ -4559,7 +4556,6 @@ def build_options(
             "legend": {"enabled": len(series) > 1},
             "series": series,
         },
-        dark=dark,
     )
 
 
@@ -4856,7 +4852,6 @@ def make_chart(
     *,
     container_id: str = "hc_chart",
     title: str | None = None,
-    dark: bool = False,
     size_col: str | None = None,
     target_col: str | None = None,
     parent_col: str | None = None,
@@ -4876,7 +4871,6 @@ def make_chart(
         x_col,
         list(y_cols),
         title=title,
-        dark=dark,
         size_col=size_col,
         target_col=target_col,
         parent_col=parent_col,
@@ -4954,7 +4948,6 @@ def build_chart_html(
     container_id: str = "hc_chart",
     height: int = 480,
     title: str | None = None,
-    dark: bool = False,
     size_col: str | None = None,
     target_col: str | None = None,
     parent_col: str | None = None,
@@ -4985,7 +4978,6 @@ def build_chart_html(
         y_cols,
         container_id=container_id,
         title=title,
-        dark=dark,
         size_col=size_col,
         target_col=target_col,
         parent_col=parent_col,
@@ -5021,7 +5013,7 @@ def build_chart_html(
     chart_js = chart.to_js_literal()
     # Match the iframe body to the chart's own background so there's no light
     # flash at the edges (or during load) when the app is in dark mode.
-    body_bg = _DARK_CHROME["bg"] if dark else "#ffffff"
+    body_bg = _DARK_CHROME["bg"]
 
     return f"""<!DOCTYPE html>
 <html>
@@ -5051,7 +5043,6 @@ def build_chart_png(
     scale: int = 2,
     width: int | None = None,
     timeout: int = 30,
-    dark: bool = False,
     size_col: str | None = None,
     target_col: str | None = None,
     parent_col: str | None = None,
@@ -5079,7 +5070,6 @@ def build_chart_png(
         x_col,
         y_cols,
         title=title,
-        dark=dark,
         size_col=size_col,
         target_col=target_col,
         parent_col=parent_col,

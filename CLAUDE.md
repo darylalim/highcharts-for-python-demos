@@ -26,8 +26,7 @@ with Highcharts. Every chart is produced by the Highcharts for Python toolkit
   `st.multiselect` on wide CSVs, plus the type-specific extra column selectors),
   caching, a KPI metric row (its third metric adapts to the chart type via
   `MARK_METRICS` — see [Chart types](#chart-types)), the render-mode selector
-  (interactive iframe / static PNG), reading the active light/dark theme
-  (`st.context.theme.type`) so charts render theme-aware, the chart embed, and a
+  (interactive iframe / static PNG), the chart embed, and a
   toggle revealing the generated Highcharts config (JS). The **no-plottable-columns
   gate** runs *below* the chart-type selectbox and is **type-aware**: xrange's
   start/end are coordinates and may be dates, and a date column is object dtype, so
@@ -91,10 +90,15 @@ with Highcharts. Every chart is produced by the Highcharts for Python toolkit
   types shipping under `0.6.0` because nothing asked the number to move. It reads the
   files directly (no build step), the same mechanical-sync idea as
   `test_theme_colors_stay_in_sync_with_config`.
-- `.streamlit/config.toml` — project Streamlit theme (brands the app shell in both
-  light and dark via `[theme.light]`/`[theme.dark]`, which unlocks the in-app
-  light/dark toggle). The chart colors are themed separately (see Conventions) since
-  charts render in an iframe the shell theme can't reach.
+- `.streamlit/config.toml` — project Streamlit theme: the bundled **financial-dashboard**
+  template, as a **single `[theme]`** (plus `[theme.sidebar]`). That shape is the decision,
+  not an omission — defining both `[theme.light]` and `[theme.dark]` is what unlocks the
+  in-app light/dark toggle, so a lone `[theme]` locks the app to one mode, here **dark**.
+  Pinned by `test_app_theme_is_a_single_mode_with_no_light_dark_toggle`, because re-adding a
+  subtable is a change nothing else would object to. The chart colors are themed separately
+  (see Conventions) since charts render in an iframe the shell theme can't reach — and that
+  includes the theme's own `chartCategoricalColors`, which Streamlit applies only to its own
+  Vega/Plotly charts, of which this app has none.
 - `.claude/settings.json` + `.claude/hooks/*.py` — committed Claude Code hooks that
   mirror the CI gates (see [Hooks](#hooks)). `.claude/settings.local.json` holds
   per-developer overrides and is gitignored.
@@ -157,9 +161,15 @@ png = build_chart_png(df, chart_type, x_col, y_cols, title=title)
 message = explain_export_failure(exc)  # plain markdown; the module stays Streamlit-free
 ```
 
-All three take an optional `dark=` flag (default `False`) theming the chart chrome;
-the app derives it from `st.context.theme.type` and threads it through the cached
-renderers, so it is part of their cache key.
+None of them takes a mode flag. `_themed` applies the chrome unconditionally, because
+`.streamlit/config.toml` is a single `[theme]` and every viewer therefore gets the dark
+shell — a light chart could only ever be a mismatch. The `dark=` flag that used to thread
+from `st.context.theme.type` through the cached renderers is **gone**, along with the light
+values it selected: a mode nothing could select, whose palette was tuned for the other one,
+was a claim of support the tests could not actually check (they asserted its hexes, not its
+legibility). What that trades away is self-correction — the chart no longer *follows* the
+shell, it assumes it — which is why
+`test_app_theme_is_a_single_mode_with_no_light_dark_toggle` is load-bearing.
 
 Beyond `x_col`/`y_cols`, a type may take one of **9 extra column kwargs**, and
 which types share one is a deliberate claim — *a link is a link, but a goal is not a
@@ -225,7 +235,7 @@ server (`export.highcharts.com`).
 **Verify by rendering** (the methodology this project cites everywhere — a new type's
 `_themed` hook, null/edge-case geometry, and light↔dark / interactive↔PNG parity are
 *decided by looking*, never inferred from a base class): render one chart to a file with
-`build_chart_html(df, type, …, dark=…)`, serve it over `http://localhost`
+`build_chart_html(df, type, …)`, serve it over `http://localhost`
 (`python3 -m http.server PORT --directory <dir>` in the background — `file://` is blocked
 by the Claude-in-Chrome extension), then screenshot it in a browser in **both** themes.
 Run scratchpad scripts with `PYTHONPATH=<repo> uv run python …` — the script's own dir,
@@ -238,7 +248,7 @@ swap the two slots of a point array, revert a call site to positional), run *tha
 restore, and diff to confirm the source came back byte-identical. A test that stays green is
 pinning nothing. Read the failure, not just the exit code: a mutant caught by `SyntaxError`
 rather than by the intended assertion is still a hole. It has already caught a dark-mode test
-asserting `"#e2e8f0" in js` — that is `_DARK_CHROME["text"]`, which `_themed` writes to the
+asserting `"#f1f5f9" in js` — that is `_DARK_CHROME["text"]`, which `_themed` writes to the
 title, both axis labels and the tooltip on *every* dark chart, so the test passed with the hook
 it existed for deleted outright.
 
@@ -461,11 +471,28 @@ conventions in their original, fully-enumerated form).
   of truth for dark mode. Anything a new chart type wants themed must go through
   `build_options`, never through a Highcharts default.
 - Theme charts via `highcharts_builder.DEFAULT_COLORS` (applied by `build_options` to every
-  chart, so the iframe and PNG paths are themed too), keeping its first color in sync with the
-  light-mode `primaryColor` in `.streamlit/config.toml`. The palette is shared across
-  light/dark; only the chart chrome flips, via `build_options(..., dark=...)` / `_DARK_CHROME`.
+  chart, so the iframe and PNG paths are themed too). It **is** `.streamlit/config.toml`'s
+  `chartCategoricalColors`, copied by hand because no theme CSS reaches an iframe or a
+  server-side PNG; `_DARK_CHROME`'s `bg`/`text`/`muted`/`grid` are likewise its
+  `backgroundColor`/`textColor`/`grayColor`/`borderColor`, and `_HEATMAP_GRADIENT_DARK`'s two
+  endpoints come off its `chartSequentialColors`. All of it is guarded by
+  `test_theme_colors_stay_in_sync_with_config`, so the copy fails the suite rather than
+  drifting. Exactly **one** entry deviates from the upstream template — index 6 is pink, not the
+  template's gray, because that gray is also its `grayColor` and therefore `_DARK_CHROME["muted"]`,
+  so series 7 was being drawn in the axis-label colour at 1.00:1;
+  `test_no_series_colour_collides_with_the_chart_chrome` is the guard that keeps any future theme
+  from walking a chrome value back into the categorical scale. The palette's **order** is load-bearing beyond its hues — `_WATERFALL_*` and
+  `_BOXPLOT_OUTLIER_COLOR` index into it, so a reshuffle repaints "a rise" and "a loss".
+  There is one mode: `_themed` applies `_DARK_CHROME` to every chart, and nothing selects
+  between alternatives. A constant that is written at build time and then overwritten by
+  `_themed` is the smell that a second mode is still hiding — `_HEATMAP_GRADIENT`,
+  `_HEATMAP_NULL` and `_BULLET_TARGET_COLOR` were each exactly that, and now hold their final
+  value at their single write.
   Two exceptions: `heatmap` colors its cells by a sequential `colorAxis` rather than the
   categorical palette, and `bullet`'s goal crossbar is the only place a **mark** flips rather
   than chrome — it necessarily crosses both the bar and the background, so a fixed colour
-  cannot work *in principle*. Invent no new colors: alias existing ones
+  cannot work *in principle* (provably: the two 3:1 luminance ranges do not overlap), and in
+  dark mode it therefore carries a **fill plus a border**, one value per surface. A mark whose
+  legibility is a property of a PAIR needs its test written over the pair — a per-path hex
+  assertion cannot see it, and did not. Invent no new colors: alias existing ones
   (`_NEEDLE_PIVOT_COLOR = _SUNBURST_ROOT_COLOR`) so paired values cannot drift.

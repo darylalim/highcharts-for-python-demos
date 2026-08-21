@@ -33,6 +33,122 @@ worth stating rather than tidying away:
 
 Dates are the last commit at that version — the point it stopped being current.
 
+## [0.18.0] - 2026-08-20
+
+### Changed
+
+- **The app ships ONE theme instead of a light/dark pair.** `.streamlit/config.toml` is now the
+  **financial-dashboard** template bundled with Streamlit's own skill docs, written as a single
+  `[theme]` (plus `[theme.sidebar]`). The shape is the decision rather than an omission: defining
+  both `[theme.light]` and `[theme.dark]` is *precisely* what unlocks the light/dark toggle in
+  Streamlit's settings menu, so a lone `[theme]` locks the app to one mode — here dark, via
+  `base = "dark"`. `st.context.theme.type` therefore reads `"dark"` for every viewer, and
+  `streamlit_app.py` hands the builder `dark=True` on every render. It is still **read** rather
+  than hardcoded, so restoring the two subtables restores the old behaviour without touching
+  Python. Pinned by `test_app_theme_is_a_single_mode_with_no_light_dark_toggle`, because re-adding
+  a subtable is a change nothing else in the suite would object to.
+- **`DEFAULT_COLORS` no longer *matches* the theme; it IS the theme's `chartCategoricalColors`.**
+  Streamlit applies that key only to its own Vega/Plotly charts, of which this app has none — every
+  chart is Highcharts, in an iframe or a server-side PNG that no theme CSS reaches — so the list has
+  to be restated in `highcharts_builder` by hand. Same for `_DARK_CHROME`'s `bg`/`text`/`muted`/
+  `grid`, which are the theme's `backgroundColor`/`textColor`/`grayColor`/`borderColor` under other
+  names, and for `_HEATMAP_GRADIENT_DARK`, whose two endpoints now come off the theme's
+  `chartSequentialColors` instead of being hand-picked slate. Only `_DARK_CHROME["axis"]` remains
+  the builder's own — a Streamlit theme has no counterpart for tick lines.
+- **`test_theme_colors_stay_in_sync_with_config` grew from three assertions to eight**, which is the
+  point of adopting the theme wholesale rather than piecemeal: every value copied across the
+  Streamlit-free boundary now has its second home. It pins the palette **as an ordered list**, not
+  as a set — `_WATERFALL_UP_COLOR`, `_WATERFALL_DOWN_COLOR`, `_WATERFALL_SUM_COLOR` and
+  `_BOXPLOT_OUTLIER_COLOR` index into it, so a reshuffle that kept all eight hues would repaint "a
+  rise" and "a loss" while every other assertion still passed. The dark heatmap ramp is pinned by
+  its **rule** (both endpoints lie on the theme's sequential scale, low before high) rather than by
+  its indices, which would only restate the constant.
+
+### Fixed
+
+- **The app's "not a category" grey had quietly become a category.** `_SUNBURST_ROOT_COLOR` — also
+  the dumbbell *before* marker and the gauge needle pivot, which alias it — exists to say "this
+  sector is the WHOLE, not one of the branches", and ring 1 *cycles* the palette, so its entire
+  definition is a hue from **outside** it. The financial-dashboard categorical scale contains
+  slate-400 at index 6, so repointing `DEFAULT_COLORS` at the theme made the constant a palette
+  entry and a seventh series would have been painted in it. Moved to slate-500. Caught by
+  `test_sunburst_root_color_is_off_the_categorical_scale` on the first full run, not by reading —
+  and because `DEFAULT_COLORS` is now itself pinned to `config.toml`, that test has become a guard
+  on the **theme**: a future palette containing the root hue fails there rather than on screen.
+- **The bullet goal crossbar lost half its contrast against its own bar, and no test could see
+  it.** `_themed` paints the crossbar `_DARK_CHROME["text"]` while the bar stays
+  `DEFAULT_COLORS[0]`; lightening that from `#2563eb` to `#60a5fa` took the pair from 4.19:1 to
+  **2.32:1**, and the crossbar visibly washed out on exactly the rows where the measure beats the
+  goal — the rows a reader most wants to find. Every bullet test stayed green because each asserts
+  one hue at one path, and this mark's legibility is a property of a **pair**. The module's
+  long-standing claim that "a fixed colour cannot work in principle" turns out to be provable
+  rather than rhetorical: clearing 3:1 on the slate background needs a relative luminance ≥ 0.25
+  and on the palette blue ≤ 0.087, ranges that do not overlap. So the dark-mode mark now carries
+  **two** values — the light fill plus a `_DARK_CHROME["bg"]` border — one per surface it crosses.
+  The test is written over the pair (each surface must have a ≥ 3:1 partner among {fill, border}),
+  which is a rule about the mark rather than a hex about today's theme; verified by deleting the
+  border half and confirming *that* assertion is what fails.
+- **Series 7 was drawn in the axis-label colour.** The upstream financial-dashboard template sets
+  `grayColor` and `chartCategoricalColors[6]` to the same `#94a3b8`, and `_DARK_CHROME["muted"]`
+  copies `grayColor` for axis labels, legend hover and axis titles — so a 7-series dark chart drew
+  one series at **1.00:1** against the chart's own furniture. Index 6 is now pink (`#f472b6`), the
+  single deliberate deviation from the template, and the hue this palette's predecessor carried in
+  that slot. The gray left the *categorical* scale rather than the chrome, because chrome is what
+  the shell and the chart have to agree on. New
+  `test_no_series_colour_collides_with_the_chart_chrome` states the rule as **identity**, not as a
+  contrast floor: a series and a gridline may legitimately sit close, but being the same string is
+  never a design call.
+- **`.streamlit/config.toml` fetched the same font twice.** The template's `headingFont` requests
+  Inter at `wght@600;700` — a strict subset of the weights `font` already requests — so every app
+  load made a second render-blocking round trip to fonts.googleapis.com for no visual difference.
+  Dropped; headings inherit `font`.
+- **`streamlit_app.py`'s theme comment described a defence the code does not have.**
+  `st.context.theme` is never absent: `streamlit/runtime/context.py` returns
+  `StreamlitTheme({"type": None})` when there is no script-run context, so neither `getattr`
+  default is reachable and `dark` lands False only because `None != "dark"`. The getattr stays as
+  version insurance; the comment now says what actually happens, since the difference matters on a
+  dark-only shell where a silent pin to light chrome would be invisible.
+- **Two test-hygiene fixes in the new sync test.** Its sequential-scale check read
+  `set(_HEATMAP_GRADIENT_DARK.values())`, which would fail on any non-colour key — precisely what
+  the builder's own note says that dict is designed to accept — so it pins the two named endpoints
+  instead. And `_config_theme()` now reports missing keys with the reason (moving colours back into
+  `[theme.light]`/`[theme.dark]` is the likeliest future edit here) rather than dying on a bare
+  `KeyError`, and its case-normalization recurses into nested tables as its docstring promised.
+- **Two prose anecdotes quoted a palette hex that has since moved.** Both recorded a rendering
+  session — the dumbbell connector's default colour read off the DOM, in `highcharts_builder.py`
+  and again in `docs/chart-types.md` — and both made their point by naming the old brand blue. The
+  point was never the hex; it was that the value **equals the series hue**. Restated as that rule,
+  which cannot go stale, in the same spirit as replacing a tally with its criterion.
+
+### Removed
+
+- **Light mode, entirely.** The `dark=` flag is gone from `build_options`, `make_chart`,
+  `build_chart_html` and `build_chart_png`, from the three `@st.cache_data` wrappers and their
+  call sites, and `streamlit_app.py` no longer reads `st.context.theme` at all. `_themed` applies
+  the chrome unconditionally. The argument is that a mode nothing can select is not a supported
+  mode: the config is a single `[theme]`, so every viewer got dark, and the light path survived
+  only in tests that asserted its **hexes** rather than its legibility — against a palette tuned
+  for dark, its eight hues ran 1.67–2.77:1 on white. "Covered" did not mean "good", and keeping
+  it meant shipping a claim of support nothing checked.
+  What it trades away is stated rather than tidied: the chart's chrome no longer *follows* the
+  shell, it assumes it, so restoring `[theme.light]`/`[theme.dark]` would put dark charts on a
+  light shell with nothing at runtime objecting — which is what makes
+  `test_app_theme_is_a_single_mode_with_no_light_dark_toggle` load-bearing rather than tidy.
+  Removal also surfaced a smell worth keeping: a colour written at build time and then
+  *overwritten* by `_themed` is a second mode still hiding. `_HEATMAP_GRADIENT`, `_HEATMAP_NULL`
+  (and so `_GAUGE_TRACK_COLOR`) and `_BULLET_TARGET_COLOR` were each exactly that; each now holds
+  its final value at its single write, and `_themed` lost two whole branches that were writing
+  values which never differed. `_LIGHT_COLOR_SCHEME_CSS` stays: it pins how Highcharts' own
+  `light-dark()` defaults resolve so the iframe agrees with the export server, which was never
+  about our flag.
+  Eighteen light-mode tests went with it, but the ones pinning theme-*independent* choices — a
+  reversed heatmap axis, tooltip formats, disabled legends — were kept and renamed rather than
+  deleted, since none of them was ever about light mode.
+- **The one-rerun theme lag is no longer reachable.** A *manual* mid-session light/dark switch was
+  applied frontend-side with no Python rerun, so the chart kept the previous mode's chrome until the
+  next interaction — pre-existing Streamlit behaviour rather than a bug here, and never fixable from
+  this side. Removing the toggle removes the only way to trigger it.
+
 ## [0.17.0] - 2026-07-19
 
 ### Added

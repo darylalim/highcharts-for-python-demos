@@ -32,8 +32,8 @@ uv run streamlit run streamlit_app.py
 
 Then open <http://localhost:8501>. Pick a sample dataset (or upload a CSV),
 choose a chart type and map its columns, and switch between two render modes:
-interactive (CDN iframe) or a static PNG. Charts follow the app's light/dark
-theme, which you can toggle from Streamlit's settings menu.
+interactive (CDN iframe) or a static PNG. The app ships a single dark theme, and
+the charts are built to match it.
 
 ## Features
 
@@ -42,16 +42,17 @@ theme, which you can toggle from Streamlit's settings menu.
 - **Two render modes** — *Interactive* runs Highcharts JS from the CDN, embedded
   via `st.iframe`; *Static (PNG)* renders server-side through the Highcharts
   export server and shows the image with a download button.
-- **Theme-aware** — charts flip their background, text, axes, and tooltip to match
-  the light/dark theme in both render modes, while each series keeps its palette
-  color. Follows your OS by default.
+- **One dark theme, end to end** — the app ships a single dark theme, and the charts
+  are built to match it in both render modes: background, text, axes and tooltip all
+  come from the same palette the Streamlit shell uses.
 - **KPI row** — rows, numeric columns, and a chart-type-adaptive third metric
   (series plotted, or the mark count: cells, tiles, stages, flows, links, boxes,
   steps, sectors, bars, or ranges).
 - **See the config** — a toggle reveals the generated Highcharts config
   (`to_js_literal()` output).
 - **Consistent palette** — every series uses the brand palette (`DEFAULT_COLORS`),
-  kept in sync with the Streamlit theme in `.streamlit/config.toml`.
+  which *is* the Streamlit theme's `chartCategoricalColors` from
+  `.streamlit/config.toml`, kept in sync by a test rather than by hand.
 
 ## Chart types
 

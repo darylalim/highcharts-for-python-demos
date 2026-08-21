@@ -38,10 +38,11 @@ png = build_chart_png(df, chart_type, x_col, y_cols, title=title)
 message = explain_export_failure(exc)  # plain markdown; the module stays Streamlit-free
 ```
 
-All three helpers take an optional `dark=` flag (default `False`) that themes the
-chart chrome (background/text/axes/gridlines/tooltip) for dark mode; the app
-derives it from `st.context.theme.type` and threads it through the cached
-renderers. Bubble charts also take a `size_col=` naming the numeric column that
+None of the three helpers takes a mode flag: `_themed` applies the chart chrome
+(background/text/axes/gridlines/tooltip) unconditionally, because `.streamlit/config.toml`
+is a single `[theme]` and every viewer gets the dark shell. The `dark=` flag that used to
+thread from `st.context.theme.type` is gone, along with the light values it selected.
+Bubble charts also take a `size_col=` naming the numeric column that
 drives each marker's area (required for `bubble`, raising `ValueError` if
 omitted; ignored by the other types), threaded through the same renderers,
 sankey charts a `target_col=` naming the destination-node column (required for
@@ -695,7 +696,23 @@ that flips a MARK rather than chrome**. That is a principle, not a preference: a
 marker necessarily crosses **both** the bar (a constant palette blue in both themes) *and* the
 background (white → slate), so a fixed colour cannot work **in principle** — a near-black reads on
 the light shell and disappears on the dark one, a near-white does the exact reverse, and both were
-rendered to confirm it. Where every border dissolve above matches a mark **to** the background,
+rendered to confirm it.
+
+That "in principle" is now **arithmetic** rather than a rendered impression, and the arithmetic
+changed the fix. Against the theme's palette, clearing WCAG 3:1 on the slate background needs a
+relative luminance ≥ 0.25 and on the palette blue needs ≤ 0.087: the two ranges do not overlap, so
+no single value exists *at all*. The flip therefore carries **two** values in dark mode — a light
+fill (16.3:1 on the background) plus `_BULLET_TARGET_BORDER_WIDTH` of `_DARK_CHROME["bg"]` border
+(7.0:1 on the bar) — because a mark spanning two surfaces needs one value per surface. Light mode
+keeps a single near-black fill, which does clear both (17.9:1 and 7.0:1); the border is a
+dark-mode repair, not part of the mark.
+
+This was found the hard way: adopting the theme's palette lightened the bar from `#2563eb` to
+`#60a5fa` and dropped the fill's contrast against it from 4.19:1 to **2.32:1**, and *every* bullet
+test stayed green — they each assert one hue at one path, and legibility here is a property of a
+**pair**. The test now states the pair as a rule (each surface must have a ≥ 3:1 partner among
+{fill, border}) rather than as a hex, so the next palette is checked too. Where every border
+dissolve above matches a mark **to** the background,
 this one matches it **against** the background; `_BULLET_TARGET_COLOR` is `_DARK_CHROME["bg"]` read
 the other way round, so the pair the crossbar swings between is exactly the pair the app shell does
 and neither can drift (`_NEEDLE_PIVOT_COLOR = _SUNBURST_ROOT_COLOR`'s aliasing rule). Highcharts'
@@ -911,7 +928,8 @@ the connector is `stroke-width: 1` in the series hue and the markers are `radius
 1px against 8px markers the delta is the least prominent thing on the chart — the eye reads pairs of
 dots, which is a scatter plot, not a set of movements. (One note for the next reader: at 1px the
 default connector *photographs* as near-black, and reading the pixels would have "found" a grey to
-fix. The DOM says `#2563eb`. On this type the attribute is the evidence and the screenshot is not.)
+fix. The DOM says the **series hue** — `DEFAULT_COLORS[0]`, ours already. On this type the
+attribute is the evidence and the screenshot is not.)
 
 Its marks are the before-to-after movements, so it needs a `count_marks` rule and a `MARK_METRICS`
 entry (**"Changes"**) — counting by label, the same number columnrange, bullet and variwide return,
@@ -1987,22 +2005,39 @@ that it is **re-derived** when the aggregation changes.
   dark mode. Anything a new chart type wants themed must go through `build_options`,
   never through a Highcharts default.
 - Theme charts via `highcharts_builder.DEFAULT_COLORS` (applied by
-  `build_options` to every chart, so the iframe and PNG paths are themed too),
-  keeping its first color in sync with the light-mode `primaryColor` in
-  `.streamlit/config.toml`. The palette is shared across light/dark; only the
-  chart chrome (background/text/axes/gridlines/tooltip) flips, via
-  `build_options(..., dark=...)` / `_DARK_CHROME`. `streamlit_app.py` reads `dark` from
-  `st.context.theme.type` and threads it through the cached renderers (so it's
-  part of their cache key). The one exception is `heatmap`, which colors its cells
-  by a sequential `colorAxis` (`_HEATMAP_GRADIENT`, anchored on
-  `DEFAULT_COLORS[0]`; a dark ramp `_HEATMAP_GRADIENT_DARK` flipped in by
-  `_themed`) rather than the categorical palette — it still carries `colors` for
+  `build_options` to every chart, so the iframe and PNG paths are themed too). It **is**
+  `.streamlit/config.toml`'s `chartCategoricalColors` — the bundled financial-dashboard
+  theme's categorical scale — copied by hand, because no theme CSS reaches an iframe or a
+  server-side PNG and Streamlit applies that key only to its own Vega/Plotly charts, of
+  which this app has none. `_DARK_CHROME`'s `bg`/`text`/`muted`/`grid` are the same theme's
+  `backgroundColor`/`textColor`/`grayColor`/`borderColor`; only its `axis` is the builder's
+  own, a Streamlit theme having no counterpart for tick lines. Every one of those copies is
+  guarded by `test_theme_colors_stay_in_sync_with_config`.
+  The palette's **order** carries meaning the hues alone do not: `_WATERFALL_UP_COLOR`,
+  `_WATERFALL_DOWN_COLOR`, `_WATERFALL_SUM_COLOR` and `_BOXPLOT_OUTLIER_COLOR` index into
+  it, so reordering the config list repaints "a rise", "a loss" and "the total" while every
+  hue stays present. And the palette **constrains** `_SUNBURST_ROOT_COLOR`: that constant's
+  whole definition is "outside the palette", so pointing `DEFAULT_COLORS` at a theme
+  containing its hue breaks it — which is exactly what happened when this theme landed
+  (slate-400 was index 6 of the new scale) and what
+  `test_sunburst_root_color_is_off_the_categorical_scale` caught.
+  There is ONE mode. `_themed` applies `_DARK_CHROME` to every chart and selects between
+  nothing; `streamlit_app.py` reads no theme at all, because the config is a single `[theme]`
+  with no `[theme.light]`/`[theme.dark]` and a light chart could only ever be a mismatch. The
+  useful smell left behind: a colour written at build time and then *overwritten* by `_themed`
+  is a second mode still hiding — `_HEATMAP_GRADIENT`, `_HEATMAP_NULL` and
+  `_BULLET_TARGET_COLOR` were each exactly that, and each now holds its final value at its
+  single write. The one exception to the categorical palette is `heatmap`, which colors its
+  cells by a sequential `colorAxis` (`_HEATMAP_GRADIENT`, its two endpoints drawn off the
+  theme's own `chartSequentialColors`) rather than the categorical palette — it still carries `colors` for
   cross-type consistency (the palette tests). The second, and the only place a **mark** flips
   rather than chrome, is `bullet`'s goal crossbar: Highcharts draws it at 140% of the bar width,
   so it necessarily crosses **both** the bar (a constant palette blue in both themes) *and* the
   chart background (white → slate), and a fixed colour therefore cannot work **in principle** —
   a near-black reads on the light shell and disappears on the dark one, a near-white does the
-  exact reverse (both rendered). Where every `borderColor` dissolve matches a mark **to** the
+  exact reverse (both rendered) — and against the current palette the two 3:1 ranges provably do
+  not overlap, so in dark mode the mark carries a **fill and a border**, one per surface. Where
+  every `borderColor` dissolve matches a mark **to** the
   background, this hook matches one **against** it, and its light-mode value
   (`_BULLET_TARGET_COLOR`) is `_DARK_CHROME["bg"]` read the other way round, so the pair the
   crossbar swings between cannot drift from the pair the app shell uses
