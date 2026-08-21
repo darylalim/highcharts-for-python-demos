@@ -1,30 +1,100 @@
-# Project-level Streamlit theme. Brands the app shell (sidebar controls, the
-# source-data dataframe, code blocks, buttons) in BOTH modes: defining both
-# [theme.light] and [theme.dark] unlocks the light/dark toggle in the app's
-# settings menu (and follows the viewer's OS preference). A lone [theme] would
-# lock the app to one mode.
+# Project-level Streamlit theme: the bundled "financial-dashboard" template
+# (streamlit/.agents/skills/developing-with-streamlit/assets/templates/themes/configs/),
+# hex lowercased to match the builder's convention.
 #
-# The Highcharts charts render in an iframe / server-side PNG, so these colors do
-# NOT reach them. The charts are themed separately in highcharts_builder: the
-# series palette (DEFAULT_COLORS) is shared across modes and its first color stays
-# in sync with the LIGHT primaryColor below, while the chart "chrome"
-# (background/text/axes) flips per mode via _DARK_CHROME — selected from
-# st.context.theme.type in streamlit_app.py. Keep [theme.dark] background/text in
-# sync with _DARK_CHROME's "bg"/"text".
+# It is a SINGLE [theme] table, and that is the point: defining both [theme.light]
+# and [theme.dark] is what unlocks the light/dark toggle in the app's settings menu,
+# so a lone [theme] locks the app to one mode — here, dark. `st.context.theme.type`
+# therefore reads "dark" for every viewer, and streamlit_app.py hands the builder
+# dark=True on every render.
+#
+# The Highcharts charts render in an iframe / server-side PNG, so NONE of these colors
+# reach them — not even chartCategoricalColors, which Streamlit applies only to its own
+# Vega/Plotly charts. The charts mirror this theme by hand in highcharts_builder:
+# DEFAULT_COLORS == chartCategoricalColors below, _DARK_CHROME's bg/text/muted/grid ==
+# backgroundColor/textColor/grayColor/borderColor, and _HEATMAP_GRADIENT_DARK is drawn
+# from chartSequentialColors. That duplication is guarded mechanically by
+# tests/test_smoke.py::test_theme_colors_stay_in_sync_with_config, so editing one side
+# alone fails the suite rather than drifting quietly.
 [theme]
-font = "sans-serif"
+base = "dark"
+primaryColor = "#60a5fa"             # bright blue for dark mode
+backgroundColor = "#0f172a"          # deep slate
+secondaryBackgroundColor = "#1e293b" # slightly lighter slate
+codeBackgroundColor = "#1e293b"
+textColor = "#f1f5f9"                # light text
+linkColor = "#60a5fa"
+borderColor = "#334155"
+codeTextColor = "#cbd5e1"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "6px"                   # subtle rounding - professional, not playful
+buttonRadius = "6px"
 
-[theme.light]
-primaryColor = "#2563eb"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f1f5f9"
-textColor = "#0f172a"
+# Typography - clean, professional fonts
+font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+baseFontSize = 14
+baseFontWeight = 400
+codeFontSize = "13px"
+headingFontSizes = ["28px", "22px", "18px", "16px", "14px", "12px"]
+headingFontWeights = [700, 600, 600, 600, 500, 500]
+linkUnderline = false
 
-[theme.dark]
-primaryColor = "#3b82f6"
+# Semantic colors for financial indicators
+greenColor = "#34d399"  # positive/gains - bright green
+redColor = "#f87171"    # negative/losses - bright red
+yellowColor = "#fbbf24" # warnings/caution
+orangeColor = "#fb923c" # alerts
+blueColor = "#60a5fa"   # informational
+violetColor = "#a78bfa" # accent/highlights
+grayColor = "#94a3b8"   # neutral/secondary text (== _DARK_CHROME["muted"])
+
+# Chart colors. Streamlit applies these to its OWN charts only; this app renders every
+# chart with Highcharts, which mirrors this list as highcharts_builder.DEFAULT_COLORS.
+# The ORDER is load-bearing there: index 0 is the brand primary (waterfall's closing
+# total, the heatmap ramp's high end, bullet's bar), 1 is the green a waterfall rise
+# takes, and 3 is the red a fall and a boxplot outlier take. Reordering repaints those
+# meanings.
+chartCategoricalColors = [
+    "#60a5fa",
+    "#34d399",
+    "#a78bfa",
+    "#f87171",
+    "#fbbf24",
+    "#38bdf8",
+    "#94a3b8",
+    "#fb923c",
+]
+
+# Sequential colors for heatmaps (blue gradient). highcharts_builder draws
+# _HEATMAP_GRADIENT_DARK's two endpoints from this scale.
+chartSequentialColors = [
+    "#0c4a6e",
+    "#075985",
+    "#0369a1",
+    "#0284c7",
+    "#0ea5e9",
+    "#38bdf8",
+    "#7dd3fc",
+    "#bae6fd",
+    "#e0f2fe",
+    "#f0f9ff",
+]
+
+# Dataframe styling
+dataframeBorderColor = "#334155"
+dataframeHeaderBackgroundColor = "#1e293b"
+
+# Sidebar
+[theme.sidebar]
 backgroundColor = "#0f172a"
 secondaryBackgroundColor = "#1e293b"
-textColor = "#e2e8f0"
+codeBackgroundColor = "#1e293b"
+textColor = "#f1f5f9"
+borderColor = "#334155"
+primaryColor = "#60a5fa"
 
 [server]
 # Auto-rerun on file save, so editing streamlit_app.py / the builder reloads

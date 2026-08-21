@@ -868,13 +868,16 @@ def test_colors_override(labeled_frame):
 
 # --------------------------------------------------------------------------- #
 # Dark theme: only the chart "chrome" flips; the series palette is shared across
-# modes (so a series keeps its color when the viewer toggles), and light mode is
-# a byte-for-byte no-op.
+# modes, and light mode is a byte-for-byte no-op. The shell now locks to dark (a lone
+# [theme] in config.toml), so these two modes are no longer a viewer-facing toggle —
+# but `dark` is still a builder INPUT, both values are still built, and the light path
+# is what the AppTests exercise, so the pairing below is live in every direction.
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("chart_type", SUPPORTED_TYPES)
 def test_dark_mode_sets_chart_background(labeled_frame, chart_type):
     # Dark mode paints the chart background so it matches the dark app shell
-    # (kept in sync with .streamlit/config.toml [theme.dark] backgroundColor).
+    # (kept in sync with .streamlit/config.toml's backgroundColor by
+    # test_theme_colors_stay_in_sync_with_config).
     opts = build_options(
         labeled_frame,
         chart_type,
@@ -938,7 +941,7 @@ def test_dark_mode_themes_cartesian_axes_text_and_legend():
     # Two series so the legend is enabled and its recoloring is meaningful.
     df = pd.DataFrame({"x": ["a", "b"], "y": [1, 2], "z": [3, 4]})
     opts = build_options(df, "line", "x", ["y", "z"], dark=True)
-    assert opts["title"]["style"]["color"] == "#e2e8f0"
+    assert opts["title"]["style"]["color"] == "#f1f5f9"
     # Axis labels + title, and the line/tick/gridline colors, all flip.
     assert opts["xAxis"]["labels"]["style"]["color"] == "#94a3b8"
     assert opts["xAxis"]["title"]["style"]["color"] == "#94a3b8"
@@ -946,7 +949,7 @@ def test_dark_mode_themes_cartesian_axes_text_and_legend():
     assert opts["xAxis"]["tickColor"] == "#475569"
     assert opts["yAxis"]["gridLineColor"] == "#334155"
     # Legend text recolors too (dark-on-dark would be unreadable otherwise).
-    assert opts["legend"]["itemStyle"]["color"] == "#e2e8f0"
+    assert opts["legend"]["itemStyle"]["color"] == "#f1f5f9"
     assert opts["legend"]["itemHoverStyle"]["color"] == "#94a3b8"
 
 
@@ -970,7 +973,7 @@ def test_dark_mode_themes_pie_labels_and_skips_axes():
     df = pd.DataFrame({"name": ["A", "B"], "v": [1.0, 2.0]})
     opts = build_options(df, "pie", "name", ["v"], dark=True)
     assert opts["chart"]["backgroundColor"] == "#0f172a"
-    assert opts["plotOptions"]["pie"]["dataLabels"]["color"] == "#e2e8f0"
+    assert opts["plotOptions"]["pie"]["dataLabels"]["color"] == "#f1f5f9"
     # Pie has no axes, so the axis-theming loop must simply skip it (not crash).
     assert "xAxis" not in opts
 
@@ -996,7 +999,7 @@ def test_dark_mode_themes_the_tooltip(labeled_frame, chart_type):
     )
     assert opts["tooltip"]["backgroundColor"] == "#0f172a"
     assert opts["tooltip"]["borderColor"] == "#475569"
-    assert opts["tooltip"]["style"]["color"] == "#e2e8f0"
+    assert opts["tooltip"]["style"]["color"] == "#f1f5f9"
 
 
 def test_dark_mode_tooltip_merge_preserves_pie_point_format():
@@ -1056,18 +1059,82 @@ def test_build_chart_html_pins_the_chart_color_scheme(chart_type, dark):
     assert "color-scheme:only dark" not in html
 
 
-def test_theme_colors_stay_in_sync_with_config():
-    # A few chart-chrome colors duplicate config.toml theme values (the builder
-    # is Streamlit-free, so it can't read the resolved theme at runtime). Guard
-    # the sync mechanically here instead of relying on cross-referencing comments.
+def _config_theme():
+    """The `[theme]` table of .streamlit/config.toml, hex values case-normalized.
+
+    Read rather than imported: the builder is Streamlit-free by design, so it cannot
+    resolve the theme at runtime and has to restate it. Normalizing case means a
+    re-pasted upstream template (which ships uppercase hex) still compares equal.
+    """
     import tomllib
 
-    from highcharts_builder import _DARK_CHROME
+    def norm(value):
+        # Only hex strings. The table also holds ints (headingFontWeights), font URLs
+        # and nested tables ([theme.sidebar]), which pass through untouched.
+        if isinstance(value, list):
+            return [norm(v) for v in value]
+        if isinstance(value, str) and value.startswith("#"):
+            return value.lower()
+        return value
 
     theme = tomllib.loads((ROOT / ".streamlit" / "config.toml").read_text())["theme"]
-    assert _DARK_CHROME["bg"] == theme["dark"]["backgroundColor"]
-    assert _DARK_CHROME["text"] == theme["dark"]["textColor"]
-    assert DEFAULT_COLORS[0] == theme["light"]["primaryColor"]
+    return {k: norm(v) for k, v in theme.items()}
+
+
+def test_app_theme_is_a_single_mode_with_no_light_dark_toggle():
+    # A [theme] carrying BOTH a [theme.light] and a [theme.dark] is what unlocks the
+    # light/dark toggle in Streamlit's settings menu; a lone [theme] locks the app to one
+    # mode. This app is deliberately locked to DARK, and that decision has to have a second
+    # home or it can be undone by re-adding a subtable that nothing objects to.
+    #
+    # It is not cosmetic. streamlit_app.py derives `dark` from st.context.theme.type and
+    # threads it into every renderer's cache key, so the mode the shell resolves to is the
+    # mode the CHART is built for. A [theme] that went light-based while _themed kept
+    # painting slate would put a dark chart on a light shell.
+    theme = _config_theme()
+    assert theme["base"] == "dark"
+    assert "light" not in theme and "dark" not in theme, (
+        "re-adding [theme.light]/[theme.dark] restores the toggle this app opted out of"
+    )
+
+
+def test_theme_colors_stay_in_sync_with_config():
+    # The chart palette and chrome DUPLICATE config.toml theme values, and must: the charts
+    # render in an iframe / server-side PNG that no theme CSS reaches, and Streamlit applies
+    # its own chartCategoricalColors only to its own Vega/Plotly charts — of which this app
+    # has none. So the theme is restated in highcharts_builder and guarded mechanically
+    # here, rather than by cross-referencing comments on both sides.
+    from highcharts_builder import _DARK_CHROME, _HEATMAP_GRADIENT_DARK
+
+    theme = _config_theme()
+
+    # The series palette IS the theme's categorical scale — the whole list, in order.
+    # Order, not just membership: _WATERFALL_UP_COLOR, _WATERFALL_DOWN_COLOR,
+    # _WATERFALL_SUM_COLOR and _BOXPLOT_OUTLIER_COLOR index into it, so a reshuffle that
+    # kept the same eight hues would repaint "a rise" and "a loss" while staying green.
+    assert list(DEFAULT_COLORS) == theme["chartCategoricalColors"]
+    # A separate claim from the line above, and it survives a reordering of that list:
+    # the brand primary leads the palette, which is what makes DEFAULT_COLORS[0] the
+    # right anchor for the heatmap's light ramp and for a waterfall's closing total.
+    assert DEFAULT_COLORS[0] == theme["primaryColor"]
+
+    # Four of the five chrome slots are theme values under different names. ("axis" is
+    # the builder's own — a Streamlit theme has no counterpart for tick lines.)
+    assert _DARK_CHROME["bg"] == theme["backgroundColor"]
+    assert _DARK_CHROME["text"] == theme["textColor"]
+    assert _DARK_CHROME["muted"] == theme["grayColor"]
+    assert _DARK_CHROME["grid"] == theme["borderColor"]
+
+    # The dark heatmap ramp is drawn from the theme's SEQUENTIAL scale. Which two stops is
+    # a legibility judgment settled by rendering, so pin the rule (both are on that scale)
+    # rather than the indices, which would only restate the constant.
+    sequential = theme["chartSequentialColors"]
+    assert set(_HEATMAP_GRADIENT_DARK.values()) <= set(sequential)
+    # ...and that it IS a ramp: low end nearer the background than the high end. Reversed,
+    # every heatmap would read inverted while every assertion above still passed.
+    assert sequential.index(_HEATMAP_GRADIENT_DARK["minColor"]) < sequential.index(
+        _HEATMAP_GRADIENT_DARK["maxColor"]
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1443,8 +1510,8 @@ def test_heatmap_dark_mode_themes_the_color_axis():
     df = pd.DataFrame({"day": ["Mon", "Tue"], "AM": [1.0, 2.0]})
     opts = build_options(df, "heatmap", "day", ["AM"], dark=True)
     assert opts["chart"]["backgroundColor"] == "#0f172a"
-    assert opts["colorAxis"]["minColor"] == "#1e293b"
-    assert opts["colorAxis"]["maxColor"] == "#60a5fa"
+    assert opts["colorAxis"]["minColor"] == "#0c4a6e"
+    assert opts["colorAxis"]["maxColor"] == "#7dd3fc"
     assert opts["colorAxis"]["labels"]["style"]["color"] == "#94a3b8"
     # The gradient legend's tick lines (full-width gridlines + the shorter edge ticks)
     # default to white and cross the bar as bright dashes; both are muted to the axis
@@ -1678,7 +1745,7 @@ def test_funnel_family_dark_mode_themes_labels_and_border(chart_type):
     assert opts["chart"]["backgroundColor"] == "#0f172a"
     po = opts["plotOptions"][chart_type]
     assert (
-        po["dataLabels"]["color"] == "#e2e8f0"
+        po["dataLabels"]["color"] == "#f1f5f9"
     )  # light text, unlike treemap's "contrast"
     assert po["borderColor"] == "#0f172a"  # segment gaps match the dark background
     # No axes, so the axis-theming loop must simply skip it (not crash).
@@ -3243,7 +3310,7 @@ def test_waterfall_serializes_and_pulls_in_the_more_module():
     assert js and "type: 'waterfall'" in js
     compact = "".join(js.split())
     assert "isSum:true" in compact  # the sum point survived
-    assert "upColor:'#16a34a'" in compact  # so did the semantic hues
+    assert f"upColor:'{DEFAULT_COLORS[1]}'" in compact  # so did the semantic hues
     assert "inside:true" in compact  # and the in-bar labels
     tags = chart.get_script_tags(as_str=True)
     assert "highcharts-more" in tags  # bubble/radar/boxplot's module, shared
@@ -3423,11 +3490,17 @@ def test_sunburst_root_color_is_off_the_categorical_scale():
     # guaranteed not to be some branch's hue, and the only way to say "this is not a category,
     # it is the whole" is a color from outside the palette. Read straight from the constant, so
     # a custom palette cannot repaint the root as one more branch.
+    #
+    # This is the test that FIRED when DEFAULT_COLORS was repointed at the config theme's
+    # chartCategoricalColors: the old slate-400 root was index 6 of the new palette, so the
+    # "not a category" grey had quietly become a category. The constant moved to slate-500.
+    # Since DEFAULT_COLORS is now itself pinned to config.toml, this assertion reaches the
+    # THEME — a future palette containing the root hue fails here rather than on screen.
     root = _points(_sun())[-1]
-    assert root["color"] == "#94a3b8"
+    assert root["color"] == "#64748b"
     assert root["color"] not in DEFAULT_COLORS
     # ...and a custom palette does NOT reach it, though it does reach ring 1 above.
-    assert _points(_sun(colors=["#111111", "#222222"]))[-1]["color"] == "#94a3b8"
+    assert _points(_sun(colors=["#111111", "#222222"]))[-1]["color"] == "#64748b"
 
 
 def test_sunburst_levels_add_an_alternating_color_variation_below_ring_one():
@@ -3808,7 +3881,7 @@ def test_sunburst_dark_mode_dissolves_the_sector_borders():
     assert opts["chart"]["backgroundColor"] == "#0f172a"
     points = _points(opts)
     assert points[0]["color"] == DEFAULT_COLORS[0]  # ring-1 hues unchanged
-    assert points[-1]["color"] == "#94a3b8"  # ...and the root's
+    assert points[-1]["color"] == "#64748b"  # ...and the root's
 
 
 # --------------------------------------------------------------------------- #
@@ -5549,7 +5622,7 @@ def test_bullet_dark_mode_flips_both_hooks_and_leaks_into_no_later_light_chart()
     PRINCIPLE, not merely in practice.
 
     The dark hue is asserted at its PATH in the option tree and in the serialized JS at the level
-    it was written to, never as a bare `"#e2e8f0" in js`: that string is `_DARK_CHROME["text"]`,
+    it was written to, never as a bare `"#f1f5f9" in js`: that string is `_DARK_CHROME["text"]`,
     which `_themed` writes to the title, both axis label styles and the tooltip on EVERY dark
     chart, so the substring test would pass with this hook deleted outright — the one thing it
     exists to catch.
@@ -5585,7 +5658,7 @@ def test_bullet_dark_mode_flips_both_hooks_and_leaks_into_no_later_light_chart()
     # background, so an unflipped crossbar is an invisible one.
     assert light["plotOptions"]["bullet"]["targetOptions"]["color"] == background
     # And the hue reaches the JS at the level it was written to — not merely somewhere in the
-    # chrome, which is what `"#e2e8f0" in js` would have settled for.
+    # chrome, which is what `"#f1f5f9" in js` would have settled for.
     flat = "".join(_bullet_js(dark=True).split())
     assert f"targetOptions:{{color:'{crossbar}'}}" in flat
 
@@ -7219,7 +7292,7 @@ def test_needle_pivot_is_one_neutral_colour_not_one_per_series(bookings_frame):
     # off-palette slate (sunburst's root colour), which reads on both backgrounds and needs no
     # dark flip. Left unset it defaults to BLACK, invisible on the dark shell.
     opts = _needle(bookings_frame, ["north", "south", "emea"])
-    assert opts["plotOptions"]["gauge"]["pivot"]["backgroundColor"] == "#94a3b8"
+    assert opts["plotOptions"]["gauge"]["pivot"]["backgroundColor"] == "#64748b"
     assert all("pivot" not in n for n in _needles(opts))  # never per series
 
 
@@ -7495,7 +7568,7 @@ def test_needle_light_mode_shape_and_dark_mode_themes_the_dial_face(bookings_fra
     assert [n["dial"]["backgroundColor"] for n in _needles(dark)] == list(
         DEFAULT_COLORS[:2]
     )
-    assert dark["plotOptions"]["gauge"]["pivot"]["backgroundColor"] == "#94a3b8"
+    assert dark["plotOptions"]["gauge"]["pivot"]["backgroundColor"] == "#64748b"
 
 
 def test_needle_and_ring_cannot_disagree_about_the_readings_or_the_dial(bookings_frame):

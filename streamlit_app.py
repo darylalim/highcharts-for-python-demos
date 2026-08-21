@@ -1179,10 +1179,20 @@ with left.container(border=True, height="stretch"):
     # The chart renders in an iframe / server PNG that the shell theme can't
     # reach, so read the active light/dark mode and let the builder flip the
     # chart's chrome to match. `dark` is part of every renderer's cache key, so
-    # each mode caches independently. Initial load matches the chart to the shell;
-    # a *manual* mid-session theme switch is applied frontend-side without a Python
-    # rerun, so the chart catches up on the next interaction. The defensive getattr
-    # keeps this working under AppTest, where st.context has no theme.
+    # each mode caches independently.
+    #
+    # config.toml is a single [theme] with no [theme.light]/[theme.dark], which locks
+    # the app to dark and removes the settings-menu toggle — so this resolves to True
+    # for every viewer today. It is still READ rather than hardcoded: the mode is the
+    # config's decision to make (pinned by test_app_theme_is_a_single_mode_with_no_
+    # light_dark_toggle), and restoring the two subtables must restore the behaviour
+    # here without touching this file. It also kept the one-rerun lag that a *manual*
+    # mid-session switch used to cause — applied frontend-side with no Python rerun —
+    # from being reachable at all.
+    #
+    # The defensive getattr keeps this working under AppTest, where st.context has no
+    # theme; those tests therefore exercise the light path, which the builder still
+    # supports even though the shell no longer selects it.
     _theme = getattr(st.context, "theme", None)
     dark = getattr(_theme, "type", "light") == "dark"
 

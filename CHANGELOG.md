@@ -33,6 +33,61 @@ worth stating rather than tidying away:
 
 Dates are the last commit at that version — the point it stopped being current.
 
+## [0.18.0] - 2026-08-20
+
+### Changed
+
+- **The app ships ONE theme instead of a light/dark pair.** `.streamlit/config.toml` is now the
+  **financial-dashboard** template bundled with Streamlit's own skill docs, written as a single
+  `[theme]` (plus `[theme.sidebar]`). The shape is the decision rather than an omission: defining
+  both `[theme.light]` and `[theme.dark]` is *precisely* what unlocks the light/dark toggle in
+  Streamlit's settings menu, so a lone `[theme]` locks the app to one mode — here dark, via
+  `base = "dark"`. `st.context.theme.type` therefore reads `"dark"` for every viewer, and
+  `streamlit_app.py` hands the builder `dark=True` on every render. It is still **read** rather
+  than hardcoded, so restoring the two subtables restores the old behaviour without touching
+  Python. Pinned by `test_app_theme_is_a_single_mode_with_no_light_dark_toggle`, because re-adding
+  a subtable is a change nothing else in the suite would object to.
+- **`DEFAULT_COLORS` no longer *matches* the theme; it IS the theme's `chartCategoricalColors`.**
+  Streamlit applies that key only to its own Vega/Plotly charts, of which this app has none — every
+  chart is Highcharts, in an iframe or a server-side PNG that no theme CSS reaches — so the list has
+  to be restated in `highcharts_builder` by hand. Same for `_DARK_CHROME`'s `bg`/`text`/`muted`/
+  `grid`, which are the theme's `backgroundColor`/`textColor`/`grayColor`/`borderColor` under other
+  names, and for `_HEATMAP_GRADIENT_DARK`, whose two endpoints now come off the theme's
+  `chartSequentialColors` instead of being hand-picked slate. Only `_DARK_CHROME["axis"]` remains
+  the builder's own — a Streamlit theme has no counterpart for tick lines.
+- **`test_theme_colors_stay_in_sync_with_config` grew from three assertions to eight**, which is the
+  point of adopting the theme wholesale rather than piecemeal: every value copied across the
+  Streamlit-free boundary now has its second home. It pins the palette **as an ordered list**, not
+  as a set — `_WATERFALL_UP_COLOR`, `_WATERFALL_DOWN_COLOR`, `_WATERFALL_SUM_COLOR` and
+  `_BOXPLOT_OUTLIER_COLOR` index into it, so a reshuffle that kept all eight hues would repaint "a
+  rise" and "a loss" while every other assertion still passed. The dark heatmap ramp is pinned by
+  its **rule** (both endpoints lie on the theme's sequential scale, low before high) rather than by
+  its indices, which would only restate the constant.
+
+### Fixed
+
+- **The app's "not a category" grey had quietly become a category.** `_SUNBURST_ROOT_COLOR` — also
+  the dumbbell *before* marker and the gauge needle pivot, which alias it — exists to say "this
+  sector is the WHOLE, not one of the branches", and ring 1 *cycles* the palette, so its entire
+  definition is a hue from **outside** it. The financial-dashboard categorical scale contains
+  slate-400 at index 6, so repointing `DEFAULT_COLORS` at the theme made the constant a palette
+  entry and a seventh series would have been painted in it. Moved to slate-500. Caught by
+  `test_sunburst_root_color_is_off_the_categorical_scale` on the first full run, not by reading —
+  and because `DEFAULT_COLORS` is now itself pinned to `config.toml`, that test has become a guard
+  on the **theme**: a future palette containing the root hue fails there rather than on screen.
+- **Two prose anecdotes quoted a palette hex that has since moved.** Both recorded a rendering
+  session — the dumbbell connector's default colour read off the DOM, in `highcharts_builder.py`
+  and again in `docs/chart-types.md` — and both made their point by naming the old brand blue. The
+  point was never the hex; it was that the value **equals the series hue**. Restated as that rule,
+  which cannot go stale, in the same spirit as replacing a tally with its criterion.
+
+### Removed
+
+- **The one-rerun theme lag is no longer reachable.** A *manual* mid-session light/dark switch was
+  applied frontend-side with no Python rerun, so the chart kept the previous mode's chrome until the
+  next interaction — pre-existing Streamlit behaviour rather than a bug here, and never fixable from
+  this side. Removing the toggle removes the only way to trigger it.
+
 ## [0.17.0] - 2026-07-19
 
 ### Added

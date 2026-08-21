@@ -911,7 +911,8 @@ the connector is `stroke-width: 1` in the series hue and the markers are `radius
 1px against 8px markers the delta is the least prominent thing on the chart — the eye reads pairs of
 dots, which is a scatter plot, not a set of movements. (One note for the next reader: at 1px the
 default connector *photographs* as near-black, and reading the pixels would have "found" a grey to
-fix. The DOM says `#2563eb`. On this type the attribute is the evidence and the screenshot is not.)
+fix. The DOM says the **series hue** — `DEFAULT_COLORS[0]`, ours already. On this type the
+attribute is the evidence and the screenshot is not.)
 
 Its marks are the before-to-after movements, so it needs a `count_marks` rule and a `MARK_METRICS`
 entry (**"Changes"**) — counting by label, the same number columnrange, bullet and variwide return,
@@ -1987,15 +1988,33 @@ that it is **re-derived** when the aggregation changes.
   dark mode. Anything a new chart type wants themed must go through `build_options`,
   never through a Highcharts default.
 - Theme charts via `highcharts_builder.DEFAULT_COLORS` (applied by
-  `build_options` to every chart, so the iframe and PNG paths are themed too),
-  keeping its first color in sync with the light-mode `primaryColor` in
-  `.streamlit/config.toml`. The palette is shared across light/dark; only the
+  `build_options` to every chart, so the iframe and PNG paths are themed too). It **is**
+  `.streamlit/config.toml`'s `chartCategoricalColors` — the bundled financial-dashboard
+  theme's categorical scale — copied by hand, because no theme CSS reaches an iframe or a
+  server-side PNG and Streamlit applies that key only to its own Vega/Plotly charts, of
+  which this app has none. `_DARK_CHROME`'s `bg`/`text`/`muted`/`grid` are the same theme's
+  `backgroundColor`/`textColor`/`grayColor`/`borderColor`; only its `axis` is the builder's
+  own, a Streamlit theme having no counterpart for tick lines. Every one of those copies is
+  guarded by `test_theme_colors_stay_in_sync_with_config`.
+  The palette's **order** carries meaning the hues alone do not: `_WATERFALL_UP_COLOR`,
+  `_WATERFALL_DOWN_COLOR`, `_WATERFALL_SUM_COLOR` and `_BOXPLOT_OUTLIER_COLOR` index into
+  it, so reordering the config list repaints "a rise", "a loss" and "the total" while every
+  hue stays present. And the palette **constrains** `_SUNBURST_ROOT_COLOR`: that constant's
+  whole definition is "outside the palette", so pointing `DEFAULT_COLORS` at a theme
+  containing its hue breaks it — which is exactly what happened when this theme landed
+  (slate-400 was index 6 of the new scale) and what
+  `test_sunburst_root_color_is_off_the_categorical_scale` caught.
+  The palette is shared across light/dark; only the
   chart chrome (background/text/axes/gridlines/tooltip) flips, via
   `build_options(..., dark=...)` / `_DARK_CHROME`. `streamlit_app.py` reads `dark` from
   `st.context.theme.type` and threads it through the cached renderers (so it's
-  part of their cache key). The one exception is `heatmap`, which colors its cells
+  part of their cache key) — and since the config is a single `[theme]` with no
+  `[theme.light]`/`[theme.dark]`, that resolves to dark for every viewer; `dark=False`
+  remains a supported builder input, exercised by the AppTests and the light-mode
+  per-type tests. The one exception is `heatmap`, which colors its cells
   by a sequential `colorAxis` (`_HEATMAP_GRADIENT`, anchored on
-  `DEFAULT_COLORS[0]`; a dark ramp `_HEATMAP_GRADIENT_DARK` flipped in by
+  `DEFAULT_COLORS[0]`; a dark ramp `_HEATMAP_GRADIENT_DARK`, its two endpoints drawn off the
+  theme's own `chartSequentialColors`, flipped in by
   `_themed`) rather than the categorical palette — it still carries `colors` for
   cross-type consistency (the palette tests). The second, and the only place a **mark** flips
   rather than chrome, is `bullet`'s goal crossbar: Highcharts draws it at 140% of the bar width,

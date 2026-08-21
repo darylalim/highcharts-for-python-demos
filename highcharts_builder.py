@@ -454,42 +454,62 @@ UNWEIGHTED_NODE_LINK_TYPES = NETWORKGRAPH_TYPES + ORGANIZATION_TYPES
 
 # Default series palette, applied to every chart so both render modes (iframe
 # and static PNG) share one look that matches the Streamlit theme in
-# .streamlit/config.toml. It leads with the config's LIGHT-mode primaryColor and
-# is shared across light and dark (only the chart chrome flips — see _themed), so
-# a series keeps its color when the viewer toggles the theme. The iframe and PNG
-# paths have no theme CSS, so they rely on this palette.
+# .streamlit/config.toml. It is that theme's `chartCategoricalColors` copied by hand:
+# Streamlit applies those to its own Vega/Plotly charts, and this app has none — every
+# chart is Highcharts, in an iframe or a server-side PNG that no theme CSS reaches — so
+# the palette has to be restated here. The copy is guarded mechanically by
+# test_theme_colors_stay_in_sync_with_config, not by this comment.
+#
+# The ORDER carries meaning that the hues alone do not, and three constants below read
+# it by index: 0 is the brand primary, 1 the green a waterfall rise takes, 3 the red a
+# fall and a boxplot outlier take. Reordering the config list repaints those.
+#
+# The palette is shared across light and dark (only the chart chrome flips — see
+# _themed), so a series keeps its color between the two. The app itself now resolves to
+# dark for every viewer (the config is a single [theme], which locks the mode), but
+# `dark=False` remains a supported builder input and stays covered — this module is
+# Streamlit-free and does not know which mode the shell settled on.
 DEFAULT_COLORS = (
-    "#2563eb",  # blue (matches config.toml primaryColor)
-    "#16a34a",  # green
-    "#f59e0b",  # amber
-    "#dc2626",  # red
-    "#7c3aed",  # violet
-    "#0891b2",  # cyan
-    "#db2777",  # pink
-    "#65a30d",  # lime
+    "#60a5fa",  # blue (== config.toml primaryColor)
+    "#34d399",  # green
+    "#a78bfa",  # violet
+    "#f87171",  # red
+    "#fbbf24",  # yellow
+    "#38bdf8",  # sky
+    "#94a3b8",  # gray
+    "#fb923c",  # orange
 )
 
 # Chart "chrome" (backgrounds, text, axes, gridlines, tooltip) for dark mode. The series
 # palette (DEFAULT_COLORS) is shared across modes — only this chrome flips — so a
-# series keeps its color when the viewer toggles the theme. Keep "bg"/"text" in
-# sync with backgroundColor/textColor in .streamlit/config.toml [theme.dark]; the
-# light path is left as Highcharts' defaults, which already match the light shell.
+# series keeps its color between them. Four of the five are the config's own theme values
+# under different names, kept in sync by the same test as the palette; only "axis" is
+# this module's alone, having no counterpart in a Streamlit theme.
+#
+# Coincidence worth stating so nobody "de-duplicates" it: "text" equals _HEATMAP_NULL
+# (and so _GAUGE_TRACK_COLOR) by value and NOT by meaning. They cannot collide in one
+# options dict — _themed flips both of those to "grid" in dark mode, and writes no text
+# color at all in light mode — but an alias would tie a dark-mode text color to a
+# light-mode fill, and a later edit to either would silently drag the other.
 _DARK_CHROME = {
-    "bg": "#0f172a",  # == config.toml [theme.dark] backgroundColor
-    "text": "#e2e8f0",  # titles, legend, pie labels (== dark textColor)
-    "muted": "#94a3b8",  # axis labels + titles
-    "grid": "#334155",  # y-axis gridlines
+    "bg": "#0f172a",  # == config.toml backgroundColor
+    "text": "#f1f5f9",  # titles, legend, pie labels (== textColor)
+    "muted": "#94a3b8",  # axis labels + titles (== grayColor)
+    "grid": "#334155",  # y-axis gridlines (== borderColor)
     "axis": "#475569",  # axis + tick lines
 }
 
 # Sequential colorAxis gradient for heatmap cell values — the one chart type that
 # colors by value, not by the categorical DEFAULT_COLORS series palette. The light
-# ramp is anchored on the brand primary (DEFAULT_COLORS[0]); the dark ramp keeps
-# the low end near the dark background and brightens the high end so cells stay
-# legible against _DARK_CHROME["bg"]. Missing cells use _HEATMAP_NULL, flipped to
-# _DARK_CHROME["grid"] in dark mode by _themed.
+# ramp is anchored on the brand primary (DEFAULT_COLORS[0]); the dark ramp's two
+# endpoints are drawn from the config theme's own `chartSequentialColors` scale, keeping
+# the low end dark enough to sit against _DARK_CHROME["bg"] and the high end bright
+# enough to stay legible on it. WHICH two stops is a legibility judgment settled by
+# rendering, so the test pins that both are ON that scale rather than pinning their
+# indices — the rule is what holds, not the choice. Missing cells use _HEATMAP_NULL,
+# flipped to _DARK_CHROME["grid"] in dark mode by _themed.
 _HEATMAP_GRADIENT = {"minColor": "#e0ecff", "maxColor": DEFAULT_COLORS[0]}
-_HEATMAP_GRADIENT_DARK = {"minColor": "#1e293b", "maxColor": "#60a5fa"}
+_HEATMAP_GRADIENT_DARK = {"minColor": "#0c4a6e", "maxColor": "#7dd3fc"}
 _HEATMAP_NULL = "#f1f5f9"
 # Above this many cells, per-cell value labels overprint into noise, so they're
 # only drawn on smaller grids.
@@ -594,7 +614,16 @@ _SUNBURST_ROOT_LABEL = "All"
 # Left unset, Highcharts paints the root one of its OWN defaults — a cyan in no palette of
 # ours (verified by rendering). This slate reads against the white shell and _DARK_CHROME
 # alike, so like the series palette it needs no dark-mode flip.
-_SUNBURST_ROOT_COLOR = "#94a3b8"  # slate: the app's "not a category" grey
+#
+# It MOVED from slate-400 to slate-500 when DEFAULT_COLORS was repointed at the config
+# theme's `chartCategoricalColors`, because that list contains slate-400 at index 6 — so the
+# app's "not a category" grey had become a category, and a 7-series chart would have painted
+# one series in it. `test_sunburst_root_color_is_off_the_categorical_scale` is what caught
+# that, and since DEFAULT_COLORS is itself now pinned to the config, that test transitively
+# guards this constant against the THEME: swap in a palette containing this hue and it fails
+# again. Worth knowing before picking a replacement — the constraint is "outside the palette",
+# and the palette is no longer ours to choose.
+_SUNBURST_ROOT_COLOR = "#64748b"  # slate: the app's "not a category" grey
 # The GOAL crossbar's LIGHT-mode hue, flipped to the light text color by `_themed` — the one
 # `_themed` hook in this module that flips a MARK rather than chrome (see there for why it must
 # flip at all, and why no fixed value can work in principle). It is `_DARK_CHROME["bg"]` read the
@@ -630,7 +659,9 @@ _DUMBBELL_BEFORE_COLOR = _SUNBURST_ROOT_COLOR  # slate: the state that no longer
 #
 # (The default connector's colour is worth one line, because the render initially suggested
 # otherwise: at 1px it *photographs* as near-black, and reading the pixels would have "found" a
-# grey to fix. The DOM says `stroke: #2563eb` — the series hue, same as ours. Nothing to fix. A
+# grey to fix. The DOM says `stroke:` the SERIES HUE, whatever DEFAULT_COLORS[0] currently is —
+# ours already, so there is nothing to fix. (Quoted as a rule, not as the hex it read that day:
+# the palette has since been repointed at the config theme and the literal would now be wrong.) A
 # reminder that on this type the attribute is the evidence and the screenshot is not.)
 #
 # On a dumbbell the connector IS the mark — the reading is the delta, not either end — and at 1px

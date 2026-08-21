@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "highcharts-studio"
-version = "0.17.0"
+version = "0.18.0"
 description = "Streamlit application for building data visualizations with Highcharts."
 # SPDX expression (PEP 639). Covers this project's own code only; the Highcharts
 # JS/export server and the highcharts-core wrapper are proprietary and
@@ -27,11 +27,13 @@ dependencies = [
     # against; it also relies on recent APIs (st.iframe, st.badge, st.pills,
     # st.multiselect, st.toggle, st.segmented_control, st.context.theme,
     # width/height="stretch", bordered st.metric KPI cards in an
-    # st.container(horizontal=True) row, and the [theme.light]/[theme.dark]
-    # split themes in .streamlit/config.toml). The most recent of those is the
-    # [theme.light]/[theme.dark] split (1.51.0), then the 1.48.0 layout APIs
-    # (horizontal flex containers, container height="stretch");
-    # st.context.theme landed in 1.46.0 — so the APP alone would floor at 1.51.0.
+    # st.container(horizontal=True) row, and the extended theming keys
+    # .streamlit/config.toml now uses — chartCategoricalColors,
+    # chartSequentialColors, baseRadius, headingFontSizes and [theme.sidebar]).
+    # That last group REPLACED the [theme.light]/[theme.dark] split (1.51.0) when
+    # the app locked to a single dark [theme], so the app-alone floor is no longer
+    # worth deriving here: it is a newer theming surface, not an older one, and it
+    # is nowhere near the binding constraint.
     #
     # The floor is 1.59.0 because the TEST HARNESS outranks the app here: 1.59.0
     # gave st.image a first-class AppTest node, and tests/test_smoke.py's Static

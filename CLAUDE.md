@@ -91,10 +91,15 @@ with Highcharts. Every chart is produced by the Highcharts for Python toolkit
   types shipping under `0.6.0` because nothing asked the number to move. It reads the
   files directly (no build step), the same mechanical-sync idea as
   `test_theme_colors_stay_in_sync_with_config`.
-- `.streamlit/config.toml` — project Streamlit theme (brands the app shell in both
-  light and dark via `[theme.light]`/`[theme.dark]`, which unlocks the in-app
-  light/dark toggle). The chart colors are themed separately (see Conventions) since
-  charts render in an iframe the shell theme can't reach.
+- `.streamlit/config.toml` — project Streamlit theme: the bundled **financial-dashboard**
+  template, as a **single `[theme]`** (plus `[theme.sidebar]`). That shape is the decision,
+  not an omission — defining both `[theme.light]` and `[theme.dark]` is what unlocks the
+  in-app light/dark toggle, so a lone `[theme]` locks the app to one mode, here **dark**.
+  Pinned by `test_app_theme_is_a_single_mode_with_no_light_dark_toggle`, because re-adding a
+  subtable is a change nothing else would object to. The chart colors are themed separately
+  (see Conventions) since charts render in an iframe the shell theme can't reach — and that
+  includes the theme's own `chartCategoricalColors`, which Streamlit applies only to its own
+  Vega/Plotly charts, of which this app has none.
 - `.claude/settings.json` + `.claude/hooks/*.py` — committed Claude Code hooks that
   mirror the CI gates (see [Hooks](#hooks)). `.claude/settings.local.json` holds
   per-developer overrides and is gitignored.
@@ -238,7 +243,7 @@ swap the two slots of a point array, revert a call site to positional), run *tha
 restore, and diff to confirm the source came back byte-identical. A test that stays green is
 pinning nothing. Read the failure, not just the exit code: a mutant caught by `SyntaxError`
 rather than by the intended assertion is still a hole. It has already caught a dark-mode test
-asserting `"#e2e8f0" in js` — that is `_DARK_CHROME["text"]`, which `_themed` writes to the
+asserting `"#f1f5f9" in js` — that is `_DARK_CHROME["text"]`, which `_themed` writes to the
 title, both axis labels and the tooltip on *every* dark chart, so the test passed with the hook
 it existed for deleted outright.
 
@@ -461,9 +466,17 @@ conventions in their original, fully-enumerated form).
   of truth for dark mode. Anything a new chart type wants themed must go through
   `build_options`, never through a Highcharts default.
 - Theme charts via `highcharts_builder.DEFAULT_COLORS` (applied by `build_options` to every
-  chart, so the iframe and PNG paths are themed too), keeping its first color in sync with the
-  light-mode `primaryColor` in `.streamlit/config.toml`. The palette is shared across
-  light/dark; only the chart chrome flips, via `build_options(..., dark=...)` / `_DARK_CHROME`.
+  chart, so the iframe and PNG paths are themed too). It **is** `.streamlit/config.toml`'s
+  `chartCategoricalColors`, copied by hand because no theme CSS reaches an iframe or a
+  server-side PNG; `_DARK_CHROME`'s `bg`/`text`/`muted`/`grid` are likewise its
+  `backgroundColor`/`textColor`/`grayColor`/`borderColor`, and `_HEATMAP_GRADIENT_DARK`'s two
+  endpoints come off its `chartSequentialColors`. All of it is guarded by
+  `test_theme_colors_stay_in_sync_with_config`, so the copy fails the suite rather than
+  drifting. The palette's **order** is load-bearing beyond its hues — `_WATERFALL_*` and
+  `_BOXPLOT_OUTLIER_COLOR` index into it, so a reshuffle repaints "a rise" and "a loss".
+  The palette is shared across light/dark; only the chart chrome flips, via
+  `build_options(..., dark=...)` / `_DARK_CHROME`. The app itself now resolves to dark for
+  every viewer, but `dark=False` stays a supported builder input and stays covered.
   Two exceptions: `heatmap` colors its cells by a sequential `colorAxis` rather than the
   categorical palette, and `bullet`'s goal crossbar is the only place a **mark** flips rather
   than chrome — it necessarily crosses both the bar and the background, so a fixed colour
