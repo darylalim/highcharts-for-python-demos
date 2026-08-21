@@ -10261,3 +10261,75 @@ def test_claude_md_kwarg_table_names_every_extra_column_kwarg():
         f"undocumented: {sorted(expected - documented)}; "
         f"stale rows: {sorted(documented - expected)}"
     )
+
+
+# The MARK_METRICS table was the last type-scaled tally in CLAUDE.md with no second home.
+# The kwarg table above is pinned by name; this one was not, so a new entry in the app's
+# dict could ship with the docs still describing the old set — the same class of drift as
+# "the four extra column selectors", and the reason the sibling tests exist at all.
+#
+# Read STATICALLY, like the cache-layer tests and for the same reason: `import
+# streamlit_app` executes the whole Streamlit script. `ast.literal_eval` is enough because
+# the dict is a literal of literals, and it will raise rather than guess if that stops
+# being true.
+_MARK_METRICS_TABLE_HEADER = "| Noun | Types |"
+
+
+def _app_mark_metrics() -> dict[str, str]:
+    """`MARK_METRICS` as the app defines it, without executing the app."""
+    tree = ast.parse((ROOT / "streamlit_app.py").read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "MARK_METRICS" for t in node.targets
+        ):
+            return ast.literal_eval(node.value)
+    raise AssertionError("streamlit_app.py no longer assigns MARK_METRICS")
+
+
+def _mark_metrics_table(text: str) -> dict[str, str]:
+    r"""CLAUDE.md's noun table, flattened back to the {type: noun} mapping it encodes.
+
+    The table groups types that share a noun to stay readable — one row pairs N nouns
+    (``a / b / c``) with N groups (``x, y · z · w``), positionally. Asserting the counts
+    match per row is what stops a silently truncated row from parsing as a shorter,
+    still-plausible mapping.
+    """
+    assert _MARK_METRICS_TABLE_HEADER in text, (
+        f"CLAUDE.md's MARK_METRICS table header {_MARK_METRICS_TABLE_HEADER!r} is gone — "
+        f"this test can no longer find the table it pins"
+    )
+    table = text.split(_MARK_METRICS_TABLE_HEADER, 1)[1].split("\n\n", 1)[0]
+    mapping: dict[str, str] = {}
+    for line in table.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) != 2 or set(cells[0]) <= {"-"}:
+            continue
+        nouns = [n.strip() for n in cells[0].split("/")]
+        groups = [g.strip() for g in cells[1].split("·")]
+        assert len(nouns) == len(groups), (
+            f"CLAUDE.md's MARK_METRICS row {line.strip()!r} pairs {len(nouns)} nouns "
+            f"with {len(groups)} type groups — they are positional, so the counts must "
+            f"match"
+        )
+        for noun, group in zip(nouns, groups, strict=True):
+            for chart_type in group.split(","):
+                mapping[chart_type.strip()] = noun
+    return mapping
+
+
+def test_claude_md_mark_metrics_table_matches_the_app():
+    """The KPI's noun table is UI copy, and UI copy scales with chart types.
+
+    Pinned by TYPE and by NOUN, not by length: a type moved from one noun to another
+    keeps the total the same, and that is exactly the edit a reader of the docs would be
+    misled by.
+    """
+    documented = _mark_metrics_table(_claude_md())
+    expected = _app_mark_metrics()
+    assert documented == expected, (
+        f"CLAUDE.md's MARK_METRICS table is out of sync with streamlit_app.py — "
+        f"missing: {sorted(set(expected) - set(documented))}; "
+        f"stale: {sorted(set(documented) - set(expected))}; "
+        f"wrong noun: "
+        f"{sorted(k for k in set(documented) & set(expected) if documented[k] != expected[k])}"
+    )

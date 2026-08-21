@@ -2,16 +2,20 @@
 
 ## Contents
 
-[Project Overview](#project-overview) · [Structure](#structure) ·
-[Chart types](#chart-types) · [Run](#run) · [Test](#test) ·
+[Project Overview](#project-overview) · [Quick start](#quick-start) ·
+[Structure](#structure) · [Chart types](#chart-types) ·
+[Adding a chart type](#adding-a-chart-type) · [Run](#run) · [Test](#test) ·
 [Lint & format](#lint--format) · [Type check](#type-check) ·
 [Release](#release) · [Hooks](#hooks) · [Conventions](#conventions)
 
-Per-type design detail — why each type is built the way it is, what the library
-silently drops, and which calls were settled by rendering — lives in
-[`docs/chart-types.md`](docs/chart-types.md). **Read it before adding or changing a
-chart type.** This file carries the commands, the file map, and the rules that
-apply to every type at once.
+Three docs, three jobs. **This file** carries the commands, the file map, and the rules
+that apply to every type at once. [`docs/chart-types.md`](docs/chart-types.md) carries the
+per-type design record — why each type is built the way it is, what the library silently
+drops, and which calls were settled by rendering; it is long, so read the section you need
+([How a chart is built](docs/chart-types.md#how-a-chart-is-built) plus the entry for the
+nearest existing type) rather than the whole file.
+[`docs/decisions.md`](docs/decisions.md) carries the argument and the incident behind
+rules stated tersely here.
 
 ## Project Overview
 
@@ -19,140 +23,137 @@ apply to every type at once.
 with Highcharts. Every chart is produced by the Highcharts for Python toolkit
 (`highcharts-core`) — the app uses no native Streamlit charts.
 
+One direction of flow, and every change lands somewhere on it:
+
+```text
+sample_data.py / CSV upload
+  -> streamlit_app.py        widgets, guards, @st.cache_data wrappers, KPI row
+  -> build_options()         DataFrame -> Highcharts options dict  (Streamlit-free)
+  -> Chart.from_options()    via make_chart()
+  -> build_chart_html()      iframe, Highcharts from the CDN        (interactive)
+     build_chart_png()       bytes from the export server           (static)
+```
+
+## Quick start
+
+```bash
+uv sync                                   # Python 3.12; installs the dev group too
+uv run streamlit run streamlit_app.py     # the app
+uv run pytest && uv run ruff check . && uv run ty check   # the three gates
+```
+
+**No environment variables, no secrets, and no API keys are required.** The app reads
+nothing from `st.secrets` or `os.environ`; `.streamlit/secrets.toml` appears only as a
+`permissions.deny` rule, guarding a file this project does not use. The two network
+dependencies are unauthenticated CDNs — `code.highcharts.com` (interactive) and
+`export.highcharts.com` (static PNG).
+
 ## Structure
 
-- `streamlit_app.py` — the Streamlit UI: data source (sample datasets or CSV
-  upload), chart-type/column controls (pills for the Y series, falling back to
-  `st.multiselect` on wide CSVs, plus the type-specific extra column selectors),
-  caching, a KPI metric row (its third metric adapts to the chart type via
-  `MARK_METRICS` — see [Chart types](#chart-types)), the render-mode selector
-  (interactive iframe / static PNG), the chart embed, and a
-  toggle revealing the generated Highcharts config (JS). The **no-plottable-columns
-  gate** runs *below* the chart-type selectbox and is **type-aware**: xrange's
-  start/end are coordinates and may be dates, and a date column is object dtype, so
-  a canonical Gantt CSV has no numeric columns at all and a `select_dtypes("number")`
-  gate would `st.stop()` it before the picker was drawn.
-- `highcharts_builder.py` — pure, Streamlit-free helpers that turn a DataFrame into
-  a Highcharts options `dict`, a `Chart`, and embeddable HTML or PNG bytes. It also
-  owns the **diagnosis** of its own failures, so a message can't drift from the
-  error it stands in for: `explain_export_failure()` (a failed PNG export — duck-typed
-  on `exc.response.status_code` rather than importing `requests`, which this project
-  never declares), `explain_tree_error()` (a malformed sunburst hierarchy),
-  `explain_xrange_error()` (a start/end column pair that can place a bar on no axis,
-  or two that disagree about which), and `explain_gauge_error()` (a dial whose max
-  does not sit above its min — the one that reads no frame at all). And it owns the
-  **options** the app's widgets offer, for the same reason: `coordinate_columns()`,
-  `GAUGE_AGGREGATIONS`, and `gauge_dial()` — the last applying that rule to a widget's
-  *value* rather than its options. Plus `count_marks()`, which returns how many marks
-  `build_options` will draw, reusing the same drop predicates (or, for sunburst and
-  xrange, the whole build) so the KPI can't drift from the chart. Independently
-  importable and unit-testable.
+- `streamlit_app.py` — the Streamlit UI: data source (sample datasets or CSV upload),
+  chart-type/column controls (pills for the Y series, falling back to `st.multiselect` on
+  wide CSVs, plus one extra column selector per extra column kwarg), the `@st.cache_data`
+  wrappers, a KPI metric row (its third metric adapts via `MARK_METRICS` — see
+  [Chart types](#chart-types)), the render-mode selector (interactive iframe / static
+  PNG), the chart embed, and a toggle revealing the generated Highcharts config (JS). The
+  **no-plottable-columns gate** runs *below* the chart-type selectbox and is
+  **type-aware**: xrange's start/end are coordinates and may be dates, and a date column
+  is object dtype, so a canonical Gantt CSV has no numeric columns at all and a
+  `select_dtypes("number")` gate would `st.stop()` it before the picker was drawn.
+- `highcharts_builder.py` — pure, Streamlit-free helpers that turn a DataFrame into a
+  Highcharts options `dict`, a `Chart`, and embeddable HTML or PNG bytes. Independently
+  importable and unit-testable. It also owns three things that would otherwise drift from
+  it: the **diagnosis** of its own failures (`explain_export_failure`, `explain_tree_error`,
+  `explain_xrange_error`, `explain_gauge_error` — so a message can't drift from the error
+  it stands in for; the first duck-types on `exc.response.status_code` rather than
+  importing `requests`, which this project never declares), the **options** its widgets
+  offer (`coordinate_columns`, `GAUGE_AGGREGATIONS`, `gauge_dial`), and `count_marks`,
+  which reuses the same drop predicates — or, for sunburst and xrange, the whole build —
+  so the KPI can't drift from the chart.
 - `sample_data.py` — pure (Streamlit-free) built-in sample datasets and the `SAMPLES`
-  registry the app offers when no CSV is uploaded. Every sample leads with a
-  **category column**, and that is load-bearing rather than tidy: the app opens on
-  `line` with the first column as X, so a numeric first column would trip the x-in-y
-  guard the moment the dataset was selected. Samples are designed as **mirrors** —
-  e.g. the columnrange, arearange, bullet, variwide and dumbbell samples all carry
-  two magnitude columns and mean something different by them, so reading them side by
-  side shows that "two magnitude columns" is a data *shape*, not a chart. Per-sample
-  rationale is in [`docs/chart-types.md`](docs/chart-types.md).
-- `tests/test_smoke.py` — builder unit tests (every chart type, the missing-data and
-  edge cases, the validation guards, and an end-to-end pass driving every supported
-  type through `Chart.from_options` / `to_js_literal`) and `sample_data` unit tests,
-  plus headless `AppTest` interaction tests. The AppTests find widgets by **label**,
-  not by position — `_pick_sample(app, chart_type)` is the shared body of the seven
-  `_pick_*_sample` helpers, each keeping its own name and its own argument for why
-  that type needs a dedicated sample rather than the landing dataset.
-- `tests/test_hooks.py` — unit tests for the `.claude/hooks/` scripts: the pure
-  decision functions (`is_python_target`, `has_dirty_python`) plus a black-box check
-  of `post_edit_py.py`'s exit-code contract (0 lets the edit through) without
-  spawning the toolchain.
+  registry the app offers when no CSV is uploaded. Every sample **but one** leads with a
+  **category column**, and that is load-bearing rather than tidy: the app opens on `line`
+  with the first column as X, so a numeric first column trips the x-in-y guard the moment
+  the dataset is selected. The exception is the scatter sample (`Height vs weight`,
+  leading with the int64 `height_cm`), which does exactly that — it is the standing
+  counterexample, not a shape to copy. Samples are otherwise designed as **mirrors** —
+  the columnrange, arearange, bullet, variwide and dumbbell samples all carry two
+  magnitude columns and mean something different by them, so reading them side by side
+  shows that "two magnitude columns" is a data *shape*, not a chart. Per-sample rationale:
+  [`docs/chart-types.md`](docs/chart-types.md#the-sample-datasets).
+- `tests/test_smoke.py` — builder unit tests (every chart type, the missing-data and edge
+  cases, the validation guards, and an end-to-end pass driving every supported type
+  through `Chart.from_options` / `to_js_literal`) and `sample_data` unit tests, plus
+  headless `AppTest` interaction tests. Prefer finding a widget by **label** — positional
+  indices (`app.selectbox[1]`) are still the majority idiom in the older AppTests and are
+  fragile: one selectbox added above shifts every index at once. There is one
+  `_pick_*_sample` helper per type that needs a non-landing dataset, each sharing
+  `_pick_sample(app, chart_type)` as its body while keeping its own name and its own
+  argument for why that type needs a dedicated sample.
+- `tests/test_hooks.py` — unit tests for the `.claude/hooks/` scripts: the pure decision
+  functions (`is_python_target`, `has_dirty_python`) plus a black-box check of
+  `post_edit_py.py`'s exit-code contract (0 lets the edit through) without spawning the
+  toolchain.
 - `tests/test_release.py` — unit tests for `.github/scripts/release.py` (CI's release
-  tooling, the `test_hooks.py` sibling): the pure functions that read the current
-  version, list the changelog's versions, slice a `CHANGELOG.md` section out
-  *verbatim* (bounded by its two `## [` headings, blank lines stripped, the oldest
-  running to EOF, a missing/empty section raising — and a heading with no trailing
-  newline reading as *empty* rather than absent), and decide which versions sit above
-  the latest-release watermark (empty
-  on a no-bump push, the one new version after one bump, **both** oldest-first after
-  two bumps in one push — the headline fix). It also pins `main()`'s CLI contract,
-  since the workflow parses its stdout: `version` prints *only* the version, bad args
-  exit 2 writing nothing to stdout — so a stray print can't corrupt a tag name.
-- `tests/test_packaging.py` — unit tests guarding the licensing metadata: the
-  `pyproject.toml` SPDX `license`/`license-files` fields, the `LICENSE` file's
-  pristine MIT text (nothing appended, so GitHub detects it as MIT), and the `NOTICE`
-  third-party notice naming both proprietary layers, kept in sync with the README
-  `## License` section — plus the README's header badges and its `## Contents` table
-  of contents (pinned to the real `##` headings), and `CHANGELOG.md`'s newest entry
-  (pinned to `pyproject.toml`'s `version`). That last one closed the suite's own blind
-  spot: `version` was the single packaging fact with *no second home*, so unlike every
-  other it could neither drift nor be checked — and it duly went stale, five chart
-  types shipping under `0.6.0` because nothing asked the number to move. It reads the
-  files directly (no build step), the same mechanical-sync idea as
-  `test_theme_colors_stay_in_sync_with_config`.
+  tooling, the `test_hooks.py` sibling): the pure functions that read the version, list
+  the changelog's versions, slice a `CHANGELOG.md` section out *verbatim*, and decide
+  which versions sit above the latest-release watermark. It also pins `main()`'s CLI
+  contract, since the workflow parses its stdout: `version` prints *only* the version, bad
+  args exit 2 writing nothing to stdout — so a stray print can't corrupt a tag name.
+- `tests/test_packaging.py` — guards the licensing metadata (the `pyproject.toml` SPDX
+  `license`/`license-files` fields, `LICENSE`'s pristine MIT text, `NOTICE`'s two
+  proprietary layers kept in sync with the README's `## License` section), the README's
+  header badges and `## Contents` table of contents, and `CHANGELOG.md`'s newest entry
+  pinned to `pyproject.toml`'s `version` — the guard that closed the suite's own
+  [blind spot](docs/decisions.md#packaging-the-fact-with-no-second-home). Reads the files
+  directly, no build step.
 - `.streamlit/config.toml` — project Streamlit theme: the bundled **financial-dashboard**
-  template, as a **single `[theme]`** (plus `[theme.sidebar]`). That shape is the decision,
-  not an omission — defining both `[theme.light]` and `[theme.dark]` is what unlocks the
-  in-app light/dark toggle, so a lone `[theme]` locks the app to one mode, here **dark**.
-  Pinned by `test_app_theme_is_a_single_mode_with_no_light_dark_toggle`, because re-adding a
-  subtable is a change nothing else would object to. The chart colors are themed separately
-  (see Conventions) since charts render in an iframe the shell theme can't reach — and that
-  includes the theme's own `chartCategoricalColors`, which Streamlit applies only to its own
-  Vega/Plotly charts, of which this app has none.
-- `.claude/settings.json` + `.claude/hooks/*.py` — committed Claude Code hooks that
-  mirror the CI gates, plus the `permissions.deny` rules that protect `uv.lock`,
+  template, as a **single `[theme]`** (plus `[theme.sidebar]`). That shape is the
+  decision, not an omission: defining both `[theme.light]` and `[theme.dark]` is what
+  unlocks the in-app light/dark toggle, so a lone `[theme]` locks the app to one mode,
+  here **dark**. Pinned by `test_app_theme_is_a_single_mode_with_no_light_dark_toggle`,
+  because re-adding a subtable is a change nothing else would object to. Chart colors are
+  themed separately (see Conventions) since no theme CSS reaches an iframe or a
+  server-side PNG.
+- `.claude/settings.json` + `.claude/hooks/*.py` — committed Claude Code hooks that mirror
+  the CI gates, plus the `permissions.deny` rules that protect `uv.lock`,
   `.streamlit/secrets.toml` and `.git/` (see [Hooks](#hooks)).
   `.claude/settings.local.json` holds per-developer overrides and is gitignored.
 - `pyproject.toml` — dependencies + the `dev` group, the project license (MIT, via the
   PEP 639 `license`/`license-files` fields), and the Ruff/ty config.
-- `.github/workflows/ci.yml` — GitHub Actions: two jobs. A `gates` job that
+- `.github/workflows/ci.yml` — GitHub Actions, two jobs. A `gates` job that
   `uv sync --locked` **once**, then runs the three checks the hooks mirror (Ruff
-  lint/format, ty, pytest) as separate steps on every push to `main` and every PR.
-  Each gate step carries `if: !cancelled() && steps.sync.outcome == 'success'`, and
-  that is what makes one job as informative as the three it replaced: a step failure
-  no longer skips the rest, so a single push reports lint **and** type **and** test
-  status rather than only the first to break — while a failed step still fails the
-  job. Ruff and ty run before pytest so a lint or type error reports in seconds
-  rather than after the suite. Then a `release` job that `needs` it,
-  runs on a push to `main` only, and — under a job-scoped `contents: write` over the
-  top-level read-only token — cuts a `v{version}` tag + GitHub release for **every**
-  `CHANGELOG.md` version above the latest released one (the watermark). Releasing
-  *every* untagged version rather than only the current one is load-bearing: two bumps
-  in a single push (exactly how `0.10.0` and `0.11.0` both reached `main` before either
-  was released) would otherwise leave the intermediate one un-released forever. Each
-  version is tagged at the commit that declares it (HEAD for the current one, else the
-  bump commit found by a `git log -S` pickaxe over `pyproject.toml` — which is why the
-  checkout is `fetch-depth: 0`), notes are sliced out of `CHANGELOG.md` *verbatim*, and
-  only the highest gets `--latest`. Idempotent, so it stays silent on pushes that don't
-  bump. The top-level `concurrency` cancels superseded runs for **PRs only** — main
-  pushes serialize instead, so a release job can't be killed mid-run and strand a
-  pushed tag with no release.
+  lint/format, ty, pytest) as separate steps on every push to `main` and every PR — each
+  guarded so that one failing step does not skip the rest, and Ruff/ty ahead of pytest so
+  a lint or type error reports in seconds. Then a `release` job that `needs` it, runs on a
+  push to `main` only, and — under a job-scoped `contents: write` over the top-level
+  read-only token — cuts a `v{version}` tag + GitHub release for **every** `CHANGELOG.md`
+  version above the latest released one (the watermark), marking only the highest
+  `--latest`. Idempotent, so it stays silent on pushes that don't bump. Why
+  [one job rather than three](docs/decisions.md#ci-one-gates-job-rather-than-three), and
+  why [every version rather than the current one](docs/decisions.md#release-two-bumps-in-one-push)
+  (plus the pickaxe, `fetch-depth: 0`, and `concurrency` cancelling PRs only).
 - `.github/scripts/release.py` — the pure, stdlib-only reader CI's `release` job calls:
   `version`, `notes VERSION` (raising if the section is absent or empty so a release is
-  never cut blank), and `to-release LATEST_TAG` (oldest-first; just the current version
-  when the repo has no releases, so it never back-fills the deliberately release-less
-  `0.1.0`–`0.6.0` tags — and **raising** on a watermark that is present but is not a
-  changelog version, which used to fail *open* and return every version in the file,
-  resurrecting those same six). The workflow feeds it a watermark only from a `gh` call
-  whose failure is an **error**: `gh release view` exits 1 both for "no releases yet" and
-  for a transient 5xx, and swallowing that status made a blip read as the former — which
-  releases only the current version and drops intermediate ones permanently, green. It only *reads* facts already pinned elsewhere by
-  `test_changelog_documents_the_current_version` — which now reuses this module's
-  `changelog_versions` rather than re-encoding the heading regex — so the notes
+  never cut blank), and `to-release LATEST_TAG` (oldest-first, and **raising** rather than
+  failing open on a watermark it does not recognize —
+  [why](docs/decisions.md#release-the-watermark-that-failed-open)). It only *reads* facts
+  already pinned by `test_changelog_documents_the_current_version`, which reuses this
+  module's `changelog_versions` rather than re-encoding the heading regex, so the notes
   cannot drift from the changelog. Pure logic + a thin `main()`, the `.claude/hooks/`
   pattern applied to release tooling; the impure parts stay in the workflow.
-- `LICENSE` — MIT for this project's own code, kept *pristine* (no text appended) so
-  GitHub's license detector classifies the repo as MIT rather than "Other".
-- `NOTICE` — the third-party notice, split out of `LICENSE` for that reason: the two
-  proprietary layers it renders with (Highcharts JS/the export server, and the
-  `highcharts-core` wrapper) are separately licensed and not covered by the MIT grant.
-  Both files are declared to packaging tools via `pyproject.toml`'s
-  `license`/`license-files`; guarded against drift by `tests/test_packaging.py`.
+- `LICENSE` / `NOTICE` — MIT for this project's own code, kept *pristine* (no text
+  appended) so GitHub's detector classifies the repo as MIT; the third-party notice is
+  split out because the two proprietary layers the app renders with (Highcharts JS / the
+  export server, and the `highcharts-core` wrapper) are separately licensed and not
+  covered by the MIT grant. Both are declared via `pyproject.toml`'s
+  `license`/`license-files` and guarded by `tests/test_packaging.py`.
 - `CHANGELOG.md` — the release notes, newest first (Keep a Changelog format). Its top
-  `## [x.y.z]` heading is `version`'s **second home**, so a bump that ships without
-  notes fails the suite. Everything below `0.7.0` is *reconstructed from git history*,
-  which is why the file says so.
+  `## [x.y.z]` heading is `version`'s **second home**, so a bump that ships without notes
+  fails the suite. Everything below `0.7.0` is *reconstructed from git history*, which is
+  why the file says so.
 - `docs/chart-types.md` — the per-type design record. See [Chart types](#chart-types).
+- `docs/decisions.md` — the argument and the incident behind rules stated tersely here.
 
 ## Chart types
 
@@ -173,30 +174,27 @@ png = build_chart_png(df, chart_type, x_col, y_cols, title=title)
 message = explain_export_failure(exc)  # plain markdown; the module stays Streamlit-free
 ```
 
-None of them takes a mode flag. `_themed` applies the chrome unconditionally, because
+None of them takes a mode flag: `_themed` applies the dark chrome unconditionally, because
 `.streamlit/config.toml` is a single `[theme]` and every viewer therefore gets the dark
-shell — a light chart could only ever be a mismatch. The `dark=` flag that used to thread
-from `st.context.theme.type` through the cached renderers is **gone**, along with the light
-values it selected: a mode nothing could select, whose palette was tuned for the other one,
-was a claim of support the tests could not actually check (they asserted its hexes, not its
-legibility). What that trades away is self-correction — the chart no longer *follows* the
-shell, it assumes it — which is why
-`test_app_theme_is_a_single_mode_with_no_light_dark_toggle` is load-bearing.
+shell. The chart no longer *follows* the shell, it assumes it — which is why
+`test_app_theme_is_a_single_mode_with_no_light_dark_toggle` is load-bearing. The removed
+`dark=` flag and what its removal traded away:
+[`docs/decisions.md`](docs/decisions.md#light-mode-and-its-removal).
 
-Beyond `x_col`/`y_cols`, a type may take one of **9 extra column kwargs**, and
-which types share one is a deliberate claim — *a link is a link, but a goal is not a
-high*. Reusing a kwarg leaves the cache layer untouched; a new one costs three
-wrappers and three call sites, and that cost is paid whenever the **role** differs even
-though the dtype and picker source match. It costs no test edit: `_FORWARDED` is
-**derived** from the builders' signatures, so the cache-layer checks pick a new kwarg up
-automatically — but the kwarg **table above** is pinned by name, so a new row here is not
-optional.
+Beyond `x_col`/`y_cols`, a type may take one of **9 extra column kwargs**, and which types
+share one is a deliberate claim — *a link is a link, but a goal is not a high*. Reusing a
+kwarg leaves the cache layer untouched; a new one costs three wrappers and three call
+sites, and that cost is paid whenever the **role** differs even though the dtype and
+picker source match. It costs no test edit: `_FORWARDED` is **derived** from the builders'
+signatures, so the cache-layer checks pick a new kwarg up automatically — but the kwarg
+**table below** is pinned by name, so a new row is not optional. Each row's middle cell is
+the widget's label *verbatim*, parenthetical included.
 
 | Kwarg | Control label | Types |
 |---|---|---|
 | `size_col` | Size (Z) | bubble |
 | `target_col` | Target (to) / Manager (to) | sankey, dependencywheel, networkgraph, organization |
-| `parent_col` | Parent | sunburst |
+| `parent_col` | Parent (blank = top level) | sunburst |
 | `end_col` | End | xrange (a **coordinate**, may be a date) |
 | `high_col` | High (top) | columnrange, arearange (a **magnitude**) |
 | `title_col` | Title | organization |
@@ -206,13 +204,15 @@ optional.
 
 The gauge family (`solidgauge`, `gauge`) takes the two that are **not** column names:
 `agg=` (one of `GAUGE_AGGREGATIONS`) and `dial=` an explicit `(min, max)`, derived from
-the **readings** by `gauge_dial` when `None`. It is why `x_col` is `str | None` on all
-five signatures — the family has no label channel, so every *other* type raises when
+the **readings** by `gauge_dial` when `None`. It is why `x_col` is `str | None` on every
+builder signature — the family has no label channel, so every *other* type raises when
 `x_col` is omitted. The two **unweighted node-link types** (`networkgraph`,
 `organization`) are its mirror, taking an **empty** `y_cols`.
 
 The KPI's third metric adapts by `MARK_METRICS` membership, so the KPI stays one branch
-however many such types there are:
+however many such types there are. The table is pinned to the dict by
+`test_claude_md_mark_metrics_table_matches_the_app`, so a new entry fails the suite until
+it is documented:
 
 | Noun | Types |
 |---|---|
@@ -230,39 +230,73 @@ resolution, its tooltip token, its guards, and the argument for each — is in
 [`docs/chart-types.md`](docs/chart-types.md).** Those arguments are load-bearing, not
 history: they are what the next type will be reasoned from.
 
+## Adding a chart type
+
+The project's dominant task, and the one that touches the most files. In order:
+
+1. **Read** [How a chart is built](docs/chart-types.md#how-a-chart-is-built) and the entry
+   for the nearest existing type — the shape it shares is usually the whole design.
+2. **Build**: add the branch in `highcharts_builder.py`, applying the type's missing-data
+   policy to values *and* labels, and `.astype(bool)`-casting every mask (see
+   [Conventions](#conventions)).
+3. **Theme**: add a `_themed` hook if the type needs one, and **verify by rendering** —
+   never infer it from a base class.
+4. **Count**: add a `count_marks` rule, and a `MARK_METRICS` entry when the mark count
+   differs from `len(y_cols)`; add the row to the table above (the test requires it).
+5. **Sample**: add a dataset to `sample_data.py` leading with a category column, and a
+   `_pick_*_sample` helper if the landing dataset can't drive it.
+6. **Wire**: add the selector in `streamlit_app.py` and any extra column widget, and
+   forward it through all three cache wrappers **by keyword, under its own name**. A new
+   kwarg also needs a row in the kwarg table above.
+7. **Test**: extend the three [sweeps](#test) rather than writing a per-type test, and
+   **verify the new test by breaking the code**.
+8. **Sweep the prose**: run both `grep` sweeps in [Conventions](#conventions) over
+   `CLAUDE.md` and `docs/chart-types.md`, and fix what they find — including drift you
+   did not cause.
+9. **Ship**: bump `version` in `pyproject.toml`, add the `CHANGELOG.md` section, and
+   commit the `uv.lock` line uv rewrites.
+
 ## Run
 
 ```bash
 uv run streamlit run streamlit_app.py
 ```
 
-`.streamlit/config.toml` themes the shell and enables `runOnSave`, so saves
-auto-rerun. When a stale chart is suspected, flush the four `@st.cache_data`
-caches (the CSV loader plus the three chart renderers) with
-`uv run streamlit cache clear`; verify config with `uv run streamlit config show`.
-A *blank* chart is usually a network issue instead: interactive mode loads
-Highcharts from the CDN (`code.highcharts.com`), static mode from the export
-server (`export.highcharts.com`).
+`.streamlit/config.toml` themes the shell and enables `runOnSave`, so saves auto-rerun.
+Verify config with `uv run streamlit config show`.
+
+When a stale chart is suspected, **restart the server** — that is what actually clears the
+`@st.cache_data` caches (the CSV loader plus one per renderer). They are plain in-memory
+caches, so `uv run streamlit cache clear` will *not* flush them: it exits 0 having cleared
+only the on-disk persisted cache, and its own source says so. A `runOnSave` rerun does not
+clear them either. In-process, `st.cache_data.clear()` or the app menu's **Clear cache**
+does the job.
+
+A *blank* chart is usually a network issue instead: interactive mode loads Highcharts from
+the CDN (`code.highcharts.com`), static mode from the export server
+(`export.highcharts.com`).
 
 **Verify by rendering** (the methodology this project cites everywhere — a new type's
-`_themed` hook, null/edge-case geometry, and light↔dark / interactive↔PNG parity are
-*decided by looking*, never inferred from a base class): render one chart to a file with
+`_themed` hook, null/edge-case geometry, and interactive↔PNG parity are *decided by
+looking*, never inferred from a base class): render one chart to a file with
 `build_chart_html(df, type, …)`, serve it over `http://localhost`
 (`python3 -m http.server PORT --directory <dir>` in the background — `file://` is blocked
-by the Claude-in-Chrome extension), then screenshot it in a browser in **both** themes.
-Run scratchpad scripts with `PYTHONPATH=<repo> uv run python …` — the script's own dir,
-not the cwd, is on `sys.path`, so a bare `import highcharts_builder` fails otherwise.
+by the Claude-in-Chrome extension), then screenshot it. Check it in both **browser** color
+schemes: the chart is always dark, so a difference between them is a bug in the
+`color-scheme` pin, not a theme. Run scratchpad scripts with
+`PYTHONPATH=<repo> uv run python …` — the script's own dir, not the cwd, is on `sys.path`,
+so a bare `import highcharts_builder` fails otherwise.
 
 **Verify a new test by breaking the code** — the mutation counterpart to the above, and
 the "a vacuous pass is worse than no test" rule turned into a procedure. Copy the source,
-make the one edit the test claims to catch (delete the `_themed` hook, flip the null policy,
-swap the two slots of a point array, revert a call site to positional), run *that test alone*,
-restore, and diff to confirm the source came back byte-identical. A test that stays green is
-pinning nothing. Read the failure, not just the exit code: a mutant caught by `SyntaxError`
-rather than by the intended assertion is still a hole. It has already caught a dark-mode test
-asserting `"#f1f5f9" in js` — that is `_DARK_CHROME["text"]`, which `_themed` writes to the
-title, both axis labels and the tooltip on *every* dark chart, so the test passed with the hook
-it existed for deleted outright.
+make the one edit the test claims to catch (delete the `_themed` hook, flip the null
+policy, swap the two slots of a point array, revert a call site to positional), run *that
+test alone*, restore, and diff to confirm the source came back byte-identical. A test that
+stays green is pinning nothing. Read the failure, not just the exit code: a mutant caught
+by `SyntaxError` rather than by the intended assertion is still a hole. It has already
+caught a dark-mode test asserting `"#f1f5f9" in js` — that is `_DARK_CHROME["text"]`,
+which `_themed` writes to the title, both axis labels and the tooltip on *every* chart, so
+the test passed with the hook it existed for deleted outright.
 
 ## Test
 
@@ -274,7 +308,8 @@ uv run pytest
 every supported chart type, then drives the full app headless via Streamlit's `AppTest`
 (switching controls, revealing the generated config, the KPI metric row, the wide-CSV
 `st.multiselect` fallback, the render-mode selector's two modes, and the guard messages).
-Per-type test inventory: [`docs/chart-types.md`](docs/chart-types.md).
+Per-type test inventory:
+[`docs/chart-types.md`](docs/chart-types.md#the-test-suite-type-by-type).
 
 Three **sweeps** are what cover a newly added type on the day it is added, rather than
 whenever someone remembers — prefer extending a sweep to writing a per-type test:
@@ -287,27 +322,16 @@ whenever someone remembers — prefer extending a sweep to writing a per-type te
   `test_count_marks_casts_every_mask_not_just_the_label_one` (which promotes warnings to
   errors — the only way the non-label casts are observable at all).
 
-The app's **cache layer** is the part the ordinary AppTests barely reach.
-`cached_chart_html`/`cached_chart_js` are covered only *indirectly*, and
-`cached_chart_png` was for a long time executed by **nothing**: the AppTests stay on the
-network-free interactive path. It is now pinned from **two** directions, because the
-network and the wiring are separable and only the network was ever worth avoiding:
-
-- **Statically**, by two `ast` tests that read `streamlit_app.py` as source: every cached
-  wrapper forwards each column/policy argument under its **own** name, and all three call
-  sites pass them by keyword. Static because `import streamlit_app` **executes the whole
-  Streamlit script** — and because it catches what the keyword form cannot:
-  `goal_col=high_col` type-checks, caches and renders the wrong column.
-- **Dynamically**, by `test_app_static_png_mode_executes_the_cached_png_wrapper`, which
-  selects Static PNG for real with `highcharts_builder.build_chart_png` monkeypatched to a
-  recorder — so the wrapper actually runs and its forwarding is observed as **values**,
-  while no export server is contacted. It clears the `@st.cache_data` caches on the way
-  **out** as well as in: `monkeypatch` restores the function but not the cached *value*,
-  so a stand-in PNG left behind would be served to any later Static PNG render, which
-  would then pass without calling the builder at all.
-
+The app's **cache layer** is the part the ordinary AppTests barely reach, so it is pinned
+from **two** directions: **statically**, by two `ast` tests that read `streamlit_app.py` as
+source (every cached wrapper forwards each column/policy argument under its **own** name,
+and all three call sites pass them by keyword); and **dynamically**, by
+`test_app_static_png_mode_executes_the_cached_png_wrapper`, which selects Static PNG for
+real with `build_chart_png` monkeypatched to a recorder, so no export server is contacted.
 The set of arguments both layers check is **derived** from the three builders' signatures
 (`_forwarded_arguments`), not hand-listed, so a new kwarg is covered the day it is added.
+Why static, and why that test clears the caches on the way *out*:
+[`docs/decisions.md`](docs/decisions.md#the-cache-layer-that-nothing-executed).
 
 ## Lint & format
 
@@ -318,6 +342,10 @@ gates — see Structure's `ci.yml` bullet and Hooks.)
 uv run ruff check --fix . && uv run ruff format .   # fix + format
 uv run ruff check . && uv run ruff format --check .  # verify (as CI does)
 ```
+
+Note `ruff format` also formats ```python fences in Markdown, so `CLAUDE.md`, `README.md`,
+`CHANGELOG.md` and `docs/*.md` are in scope for the format gate even though the hooks
+(which route on `.py`) ignore them.
 
 ## Type check
 
@@ -346,8 +374,9 @@ only the highest `--latest`. It is idempotent (a push that doesn't bump the
 version cuts nothing), so do not tag or `gh release create` by hand.
 
 Bumping `version` also makes the next `uv run` rewrite `uv.lock`'s own
-`highcharts-studio` version line; commit that with the bump (the `guard_paths.py` hook
-blocks *manual* `uv.lock` edits, but uv's own re-sync is expected, not a stray change).
+`highcharts-studio` version line; commit that with the bump. The `Edit(uv.lock)` deny rule
+blocks *manual* edits to the lockfile, but uv's own re-sync is expected, not a stray
+change.
 
 ## Hooks
 
@@ -375,31 +404,17 @@ aren't excluded), so the tooling that enforces the app enforces the hooks too.
   uncommitted `.py` changes (app, test, or the hook scripts under
   `.claude/hooks/`); exits 2 on a real failure (pytest exit 1/2) to feed the
   output back, treating a tooling/env failure as a no-op, with a
-  `stop_hook_active` guard so it can't loop. Mirrors the test gate.
-There is deliberately **no PreToolUse path guard**. `uv.lock`,
-`.streamlit/secrets.toml` and `.git/` are protected by `permissions.deny` rules in the
-same `settings.json` instead, which is strictly stronger than the `guard_paths.py` hook
-that used to do it (retired once Claude Code's file-permission rules could): the
-permission engine runs **before** any hook and applies to every path into the
-filesystem, not just the tools a `matcher` names — so it also catches a Bash output
-redirection (`echo … > uv.lock`), which an `Edit|Write|MultiEdit` matcher never sees.
-Three details make the three rules a faithful replacement, and each is why the rule is
-spelled the way it is:
+  `stop_hook_active` guard so it can't loop. Mirrors the test gate. Note it routes on
+  `.py`, so a docs-only change does **not** trigger it — run `uv run pytest` yourself after
+  editing `CLAUDE.md`, which the suite parses.
 
-- Claude Code consults **only** `Edit(...)` and `Read(...)` path rules, and warns at
-  startup on a `Write(...)`/`MultiEdit(...)` path rule it will never check — so the one
-  `Edit` rule covers all three edit tools, and writing `Write(uv.lock)` would silently
-  protect nothing.
-- A **bare filename** follows gitignore semantics: `Edit(uv.lock)` is
-  `Edit(**/uv.lock)`, matching at any depth. That is what reproduces the retired hook's
-  match-by-basename rather than pinning one location.
-- `Read(...)` also blocks Edit and Write on the same path, so the secrets rule is a
-  **`Read`** deny: it keeps the file out of the context window, which a PreToolUse hook
-  on the edit tools could not do at all.
-
-`.git` is additionally a built-in **protected path** (writes are never auto-approved
-outside `bypassPermissions`), but that only *prompts*; the deny rule blocks outright in
-every mode, which is why it is still written out rather than left to the default.
+There is deliberately **no PreToolUse path guard**. `uv.lock`, `.streamlit/secrets.toml`
+and `.git/` are protected by `permissions.deny` rules in the same `settings.json` instead,
+which is strictly stronger: the permission engine runs **before** any hook and applies to
+every path into the filesystem, not just the tools a `matcher` names — so it also catches
+a Bash output redirection (`echo … > uv.lock`), which an `Edit|Write|MultiEdit` matcher
+never sees. Why each of the three rules is spelled the way it is:
+[`docs/decisions.md`](docs/decisions.md#permissions-why-each-deny-rule-is-spelled-the-way-it-is).
 
 Adding or changing a hook triggers Claude Code's one-time hook-review prompt
 before it runs.
@@ -408,20 +423,21 @@ before it runs.
 
 Each rule below is stated with its mechanism. The per-type worked examples are in
 [`docs/chart-types.md`](docs/chart-types.md) (see its Appendix for these same
-conventions in their original, fully-enumerated form).
+conventions in their original, fully-enumerated form); the argument behind each is in
+[`docs/decisions.md`](docs/decisions.md).
 
-- When working with Python, invoke the relevant Astral skill (`/astral:uv`,
-  `/astral:ty`, `/astral:ruff`) for uv, ty, and ruff to ensure best practices
-  are followed.
-- Keep chart-building logic (DataFrame → Highcharts) in `highcharts_builder.py`,
-  free of Streamlit imports, so it stays unit-testable.
-- Keep each hook's decision logic in a pure, importable function in `.claude/hooks/`
-  (as the builder is), so `tests/test_hooks.py` can cover it without subprocesses; the
-  `main()` wrapper handles the stdin/exit-code plumbing and any impure subprocess
-  orchestration (ruff/ty/pytest/git). `.github/scripts/release.py` follows the same
-  split for CI, tested by `tests/test_release.py`; both load their script by file path
-  via `tests/conftest.py`'s `load_script`.
-- The `release` job in `ci.yml` carries real bash, so validate edits before pushing:
+- **Astral tooling.** When working with Python, invoke the relevant Astral skill
+  (`/astral:uv`, `/astral:ty`, `/astral:ruff`) for uv, ty, and ruff to ensure best
+  practices are followed.
+- **Streamlit-free builder.** Keep chart-building logic (DataFrame → Highcharts) in
+  `highcharts_builder.py`, free of Streamlit imports, so it stays unit-testable.
+- **Pure decision functions.** Keep each hook's decision logic in a pure, importable
+  function in `.claude/hooks/` (as the builder is), so `tests/test_hooks.py` can cover it
+  without subprocesses; the `main()` wrapper handles the stdin/exit-code plumbing and any
+  impure subprocess orchestration (ruff/ty/pytest/git). `.github/scripts/release.py`
+  follows the same split for CI, tested by `tests/test_release.py`; both load their script
+  by file path via `tests/conftest.py`'s `load_script`.
+- **Validate CI bash before pushing.** The `release` job in `ci.yml` carries real bash:
   `shellcheck -s bash` the extracted `run:` block and structure-check the file with
   `uv run --with pyyaml` (neither is a project dep). Exercise the script on the
   interpreter the job uses:
@@ -441,92 +457,78 @@ conventions in their original, fully-enumerated form).
 
   Check each hit against the code. The sweep catches **pre-existing** drift too, not only
   what you just added — fix what it finds, not only what your diff caused. Note the second
-  regex is itself a tally that goes stale: each new type can push an ordinal past the end of
-  the alternation, so extend it rather than assuming it still covers the top of the range.
+  regex is itself a tally that goes stale: each new type can push an ordinal past the end
+  of the alternation, so extend it rather than assuming it still covers the top of the
+  range.
 
-  **Bare CARDINALS ("the four extra column selectors") are deliberately *not* swept.** They
-  are the same bug — a number in prose is a fact about the code with no second home — and
-  they have drifted twice, in `docs/chart-types.md` and in `tests/test_smoke.py`'s AppTest
-  preamble, both saying "the four"/"the three" long after there were nine. But a sweep is the
-  wrong instrument: widened to cardinals it turns up ~59 hits across the docs and the source
-  against ~1 real one, because almost every cardinal is structurally fixed ("the two ends of a
-  bar", "the three builders"). A signal rate that low does not survive being run by hand.
-  So the counts that **scale with chart types** are pinned mechanically instead, by the
-  docs-count tests in `tests/test_smoke.py` (a rule, not a tally — this sentence would
-  otherwise need editing every time one was added): they pin the supported-type count in
-  both docs, the extra-column kwarg count, and the kwarg table below checked **by name**,
-  so a rename cannot pass by keeping the total the same. Adding a type or a kwarg fails them on the day it lands.
-  Two consequences for prose: a count that scales needs no sweep but **must** appear in a
-  form one of those tests reads, and new prose about a type-scaled set should prefer a rule
-  ("one selector per extra column kwarg") to a tally — a rule cannot go stale.
-- Render every visualization with Highcharts (`highcharts-core`); do not use native
-  Streamlit charts.
-- Use `EnforcedNull` (from `highcharts_core.constants`) for missing data points in dict
-  configs fed to highcharts-core, **not** Python `None`. **There is exactly ONE exception,
-  and it is exactly one slot wide: a bullet point's GOAL — the second element of its
-  `[measure, goal]` array — must be Python `None`.** Do not "fix" it back.
-  `options/series/data/bullet.py`'s `target` setter runs
-  `validators.numeric(value, allow_empty=True)`, which admits `None` and rejects
-  `EnforcedNullType` with `CannotCoerceError` — raised at `Chart.from_options`, **one layer
-  below `build_options`**. So the whole options-dict suite stays **green** while the chart
-  cannot be built at all, and the app's interactive path (which does not catch builder
-  errors) shows a bare traceback naming neither `target` nor `bullet`. Pinned by a test that
+  Bare **cardinals** are deliberately *not* swept — the signal rate is far too low to
+  survive being run by hand
+  ([why](docs/decisions.md#prose-drift-why-cardinals-are-not-swept)). Counts that scale
+  with chart types are pinned mechanically instead, by the docs-count tests in
+  `tests/test_smoke.py`: the supported-type count in both docs, the extra-column kwarg
+  count, the kwarg table checked **by name** (so a rename cannot pass by keeping the total
+  the same), and the `MARK_METRICS` table. Two consequences for prose: a count that scales
+  needs no sweep but **must** appear in a form one of those tests reads, and new prose
+  about a type-scaled set should prefer a **rule** ("one selector per extra column kwarg")
+  to a **tally** — a rule cannot go stale.
+- **Highcharts only.** Render every visualization with `highcharts-core`; do not use
+  native Streamlit charts.
+- **Null policy.** Use `EnforcedNull` (from `highcharts_core.constants`) for missing data
+  points in dict configs fed to highcharts-core, **not** Python `None`. **There is exactly
+  ONE exception, and it is exactly one slot wide: a bullet point's GOAL — the second
+  element of its `[measure, goal]` array — must be Python `None`.** Do not "fix" it back;
+  it raises one layer *below* `build_options`, so the options-dict suite stays green while
+  the chart cannot be built at all
+  ([mechanism](docs/decisions.md#the-bullet-goal-that-must-be-none)). Pinned by a test that
   drives `make_chart` rather than `build_options` — the only layer at which the failure is
   observable.
-- A **row-less** frame (columns, no rows — a CSV with a header and no data) is a legitimate
-  input and must draw an **empty chart, not raise**. Every `Series.map(...)` used as a mask
-  must therefore be `.astype(bool)`-cast: `.map()` infers its result dtype from the values it
-  produced, and with no rows there are none, so it returns an empty **non-boolean** Series.
-  That breaks three ways — a DataFrame indexed by a non-boolean Series is read as a list of
-  **column names** (one shared line, so this killed *every* type at once, and a new type
-  inherits the bug the day it is added unless the cast is there); `.sum()` of an empty string
-  mask is `''`, so `int()` raises; and `&` between two of them raises out of the Arrow kernel,
-  while `bool & str` merely *warns* today but is deprecated and will raise in pandas 4.
-- Treat a **non-finite** number as a missing one. `pd.isna(inf)` is `False`, but an infinity
-  can't be serialized: `to_js_literal` emits the bare token `inf`, which is not a JavaScript
-  identifier (JS spells it `Infinity`), so the chart call dies with a `ReferenceError` and the
-  iframe renders blank; the export server, sent the non-standard JSON literal `Infinity`,
-  answers `400`. Each type applies its own missing-data policy to a non-finite **value** —
-  keep-the-slot types via `_num`, drop-the-row types via `_plottable`, the aggregating types
-  via `_finite_values` — and the same policy governs the **label** column via `_label_ok`.
-  Reachable from a plain CSV: `inf`, `Infinity`, `-inf` and `1e400` (which silently
-  overflows), and a blank cell (`nan`). One trap is pandas', not Highcharts': an **empty**
-  column sums to `0.0`, the additive **identity** — a confident claim of "the total is zero"
-  where the truth is "there is no data" — so `_gauge_value` tests for empty **above** the
-  reducer. Only `sum` lies, which makes it worse rather than better.
-- `build_chart_html` pins the chart's `color-scheme` to `only light`
-  (`_LIGHT_COLOR_SCHEME_CSS`, on the `.highcharts-root` `<svg>`, **not** `html`: Highcharts
-  declares `color-scheme: light dark` on the `.highcharts-container` div between them, and
-  since the property inherits, that shadows an `html` rule for the SVG subtree — so the pin
-  must sit at or below the container to win). Highcharts ≥ 13 expresses its own defaults as
-  `light-dark()` CSS variables, so any color we *don't* set would follow the **viewer's
-  browser**, not the `dark` flag. The export server already rasterizes with the light
-  resolution, so this makes the two render modes agree and leaves `_themed` the single source
-  of truth for dark mode. Anything a new chart type wants themed must go through
-  `build_options`, never through a Highcharts default.
-- Theme charts via `highcharts_builder.DEFAULT_COLORS` (applied by `build_options` to every
-  chart, so the iframe and PNG paths are themed too). It **is** `.streamlit/config.toml`'s
-  `chartCategoricalColors`, copied by hand because no theme CSS reaches an iframe or a
-  server-side PNG; `_DARK_CHROME`'s `bg`/`text`/`muted`/`grid` are likewise its
-  `backgroundColor`/`textColor`/`grayColor`/`borderColor`, and `_HEATMAP_GRADIENT_DARK`'s two
-  endpoints come off its `chartSequentialColors`. All of it is guarded by
-  `test_theme_colors_stay_in_sync_with_config`, so the copy fails the suite rather than
-  drifting. Exactly **one** entry deviates from the upstream template — index 6 is pink, not the
-  template's gray, because that gray is also its `grayColor` and therefore `_DARK_CHROME["muted"]`,
-  so series 7 was being drawn in the axis-label colour at 1.00:1;
-  `test_no_series_colour_collides_with_the_chart_chrome` is the guard that keeps any future theme
-  from walking a chrome value back into the categorical scale. The palette's **order** is load-bearing beyond its hues — `_WATERFALL_*` and
+- **Row-less frames.** A frame with columns and no rows (a CSV with a header and no data)
+  is a legitimate input and must draw an **empty chart, not raise**. Every
+  `Series.map(...)` used as a mask must therefore be `.astype(bool)`-cast: `.map()` infers
+  its result dtype from the values it produced, and with no rows there are none, so it
+  returns an empty **non-boolean** Series. A DataFrame indexed by one is read as a list of
+  **column names** — one shared line, so this killed *every* type at once, and a new type
+  inherits the bug the day it is added unless the cast is there
+  ([the other two failure modes](docs/decisions.md#row-less-frames-three-ways-a-non-boolean-mask-breaks)).
+- **Non-finite is missing.** `pd.isna(inf)` is `False`, but an infinity can't be
+  serialized: `to_js_literal` emits the bare token `inf`, which is not a JavaScript
+  identifier (JS spells it `Infinity`), so the chart call dies with a `ReferenceError` and
+  the iframe renders blank; the export server, sent the non-standard JSON literal
+  `Infinity`, answers `400`. Each type applies its own missing-data policy to a non-finite
+  **value** — keep-the-slot types via `_num`, drop-the-row types via `_plottable`, the
+  aggregating types via `_finite_values` — and the same policy governs the **label** column
+  via `_label_ok`. Reachable from a plain CSV: `inf`, `Infinity`, `-inf` and `1e400` (which
+  silently overflows), and a blank cell (`nan`). One trap is pandas', not Highcharts': an
+  **empty** column sums to `0.0`, the additive **identity** — a confident claim of "the
+  total is zero" where the truth is "there is no data" — so `_gauge_value` tests for empty
+  **above** the reducer. Only `sum` lies, which makes it worse rather than better.
+- **Never rely on a Highcharts default.** `build_chart_html` pins the chart's
+  `color-scheme` to `only light` (`_LIGHT_COLOR_SCHEME_CSS`, on the `.highcharts-root`
+  `<svg>`, **not** `html` —
+  [why the pin must sit that low](docs/decisions.md#color-scheme-why-the-pin-sits-on-the-svg)).
+  Highcharts ≥ 13 expresses its own defaults as `light-dark()` CSS variables, so any color
+  the project does *not* set would follow the **viewer's browser**. The export server
+  already rasterizes with the light resolution, so this makes the two render modes agree
+  and leaves `_themed` the single source of truth for the dark chrome. Anything a new chart
+  type wants themed must go through `build_options`.
+- **Chart colors.** Theme via `highcharts_builder.DEFAULT_COLORS` (applied by
+  `build_options` to every chart, so the iframe and PNG paths are themed too). It **is**
+  `.streamlit/config.toml`'s `chartCategoricalColors`, copied by hand because no theme CSS
+  reaches an iframe or a server-side PNG; `_DARK_CHROME`'s `bg`/`text`/`muted`/`grid` are
+  likewise its `backgroundColor`/`textColor`/`grayColor`/`borderColor`, and
+  `_HEATMAP_GRADIENT`'s two endpoints come off its `chartSequentialColors`. All of it is
+  guarded by `test_theme_colors_stay_in_sync_with_config`, so the copy fails the suite
+  rather than drifting. Exactly **one** entry deviates from the upstream template — index 6
+  is pink, not the template's gray, guarded by
+  `test_no_series_colour_collides_with_the_chart_chrome`
+  ([why](docs/decisions.md#palette-the-one-deviation-and-the-second-mode-smell)). The
+  palette's **order** is load-bearing beyond its hues — `_WATERFALL_*` and
   `_BOXPLOT_OUTLIER_COLOR` index into it, so a reshuffle repaints "a rise" and "a loss".
-  There is one mode: `_themed` applies `_DARK_CHROME` to every chart, and nothing selects
-  between alternatives. A constant that is written at build time and then overwritten by
-  `_themed` is the smell that a second mode is still hiding — `_HEATMAP_GRADIENT`,
-  `_HEATMAP_NULL` and `_BULLET_TARGET_COLOR` were each exactly that, and now hold their final
-  value at their single write.
-  Two exceptions: `heatmap` colors its cells by a sequential `colorAxis` rather than the
-  categorical palette, and `bullet`'s goal crossbar is the only place a **mark** flips rather
-  than chrome — it necessarily crosses both the bar and the background, so a fixed colour
-  cannot work *in principle* (provably: the two 3:1 luminance ranges do not overlap), and in
-  dark mode it therefore carries a **fill plus a border**, one value per surface. A mark whose
-  legibility is a property of a PAIR needs its test written over the pair — a per-path hex
+  There is one mode, and a constant written at build time then overwritten by `_themed` is
+  the smell that a second one is still hiding. Two marks sit outside the categorical
+  palette: `heatmap` colors its cells by a sequential `colorAxis`, and `bullet`'s goal
+  crossbar carries a **fill plus a border** — one value per surface, because it crosses
+  both the bar and the background and no single colour can be legible on both. A mark whose
+  legibility is a property of a PAIR needs its test written over the pair; a per-path hex
   assertion cannot see it, and did not. Invent no new colors: alias existing ones
   (`_NEEDLE_PIVOT_COLOR = _SUNBURST_ROOT_COLOR`) so paired values cannot drift.
