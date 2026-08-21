@@ -64,9 +64,9 @@ with Highcharts. Every chart is produced by the Highcharts for Python toolkit
   `_pick_*_sample` helpers, each keeping its own name and its own argument for why
   that type needs a dedicated sample rather than the landing dataset.
 - `tests/test_hooks.py` — unit tests for the `.claude/hooks/` scripts: the pure
-  decision functions (`protected_reason`, `is_python_target`, `has_dirty_python`)
-  plus a black-box check of the exit-code contract for `guard_paths.py` and
-  `post_edit_py.py` (2 blocks, 0 allows) without spawning the toolchain.
+  decision functions (`is_python_target`, `has_dirty_python`) plus a black-box check
+  of `post_edit_py.py`'s exit-code contract (0 lets the edit through) without
+  spawning the toolchain.
 - `tests/test_release.py` — unit tests for `.github/scripts/release.py` (CI's release
   tooling, the `test_hooks.py` sibling): the pure functions that read the current
   version, list the changelog's versions, slice a `CHANGELOG.md` section out
@@ -100,8 +100,9 @@ with Highcharts. Every chart is produced by the Highcharts for Python toolkit
   includes the theme's own `chartCategoricalColors`, which Streamlit applies only to its own
   Vega/Plotly charts, of which this app has none.
 - `.claude/settings.json` + `.claude/hooks/*.py` — committed Claude Code hooks that
-  mirror the CI gates (see [Hooks](#hooks)). `.claude/settings.local.json` holds
-  per-developer overrides and is gitignored.
+  mirror the CI gates, plus the `permissions.deny` rules that protect `uv.lock`,
+  `.streamlit/secrets.toml` and `.git/` (see [Hooks](#hooks)).
+  `.claude/settings.local.json` holds per-developer overrides and is gitignored.
 - `pyproject.toml` — dependencies + the `dev` group, the project license (MIT, via the
   PEP 639 `license`/`license-files` fields), and the Ruff/ty config.
 - `.github/workflows/ci.yml` — GitHub Actions: four jobs. Three gates (pytest, Ruff
@@ -339,7 +340,7 @@ blocks *manual* `uv.lock` edits, but uv's own re-sync is expected, not a stray c
 
 ## Hooks
 
-`.claude/settings.json` wires three project hooks (committed; the per-developer
+`.claude/settings.json` wires two project hooks (committed; the per-developer
 `.claude/settings.local.json` stays gitignored) that mirror the CI gates so edits
 stay green before a push. Each is a stdlib-only Python script under
 `.claude/hooks/`, run via `uv run --project "$CLAUDE_PROJECT_DIR" python …` so it
@@ -364,8 +365,30 @@ aren't excluded), so the tooling that enforces the app enforces the hooks too.
   `.claude/hooks/`); exits 2 on a real failure (pytest exit 1/2) to feed the
   output back, treating a tooling/env failure as a no-op, with a
   `stop_hook_active` guard so it can't loop. Mirrors the test gate.
-- `guard_paths.py` (PreToolUse) — blocks direct edits to `uv.lock`,
-  `.streamlit/secrets.toml`, and `.git/` internals.
+There is deliberately **no PreToolUse path guard**. `uv.lock`,
+`.streamlit/secrets.toml` and `.git/` are protected by `permissions.deny` rules in the
+same `settings.json` instead, which is strictly stronger than the `guard_paths.py` hook
+that used to do it (retired once Claude Code's file-permission rules could): the
+permission engine runs **before** any hook and applies to every path into the
+filesystem, not just the tools a `matcher` names — so it also catches a Bash output
+redirection (`echo … > uv.lock`), which an `Edit|Write|MultiEdit` matcher never sees.
+Three details make the three rules a faithful replacement, and each is why the rule is
+spelled the way it is:
+
+- Claude Code consults **only** `Edit(...)` and `Read(...)` path rules, and warns at
+  startup on a `Write(...)`/`MultiEdit(...)` path rule it will never check — so the one
+  `Edit` rule covers all three edit tools, and writing `Write(uv.lock)` would silently
+  protect nothing.
+- A **bare filename** follows gitignore semantics: `Edit(uv.lock)` is
+  `Edit(**/uv.lock)`, matching at any depth. That is what reproduces the retired hook's
+  match-by-basename rather than pinning one location.
+- `Read(...)` also blocks Edit and Write on the same path, so the secrets rule is a
+  **`Read`** deny: it keeps the file out of the context window, which a PreToolUse hook
+  on the edit tools could not do at all.
+
+`.git` is additionally a built-in **protected path** (writes are never auto-approved
+outside `bypassPermissions`), but that only *prompts*; the deny rule blocks outright in
+every mode, which is why it is still written out rather than left to the default.
 
 Adding or changing a hook triggers Claude Code's one-time hook-review prompt
 before it runs.

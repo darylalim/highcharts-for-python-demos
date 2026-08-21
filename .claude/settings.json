@@ -1,16 +1,12 @@
 {
+  "permissions": {
+    "deny": [
+      "Edit(uv.lock)",
+      "Read(.streamlit/secrets.toml)",
+      "Edit(.git/**)"
+    ]
+  },
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Edit|Write|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "uv run --project \"$CLAUDE_PROJECT_DIR\" python \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard_paths.py\""
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit",

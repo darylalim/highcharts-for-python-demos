@@ -6,21 +6,23 @@ The hooks are dev tooling — they mirror the CI gates (Ruff, ty, pytest) so
 Claude's edits stay green — not app code, but they carry real decision logic
 that deserves regression coverage:
 
-- ``guard_paths.protected_reason`` — which paths a PreToolUse edit must be
-  blocked for (``uv.lock``, ``.streamlit/secrets.toml``, ``.git/`` internals).
 - ``post_edit_py.is_python_target`` — which edited files route to ruff + ty.
 - ``pytest_stop.has_dirty_python`` — whether ``git status --porcelain`` output
   names a changed ``.py`` outside ``.claude/`` (the gate that keeps the Stop
   hook from running the suite on conversational turns).
 
 Those pure functions are exercised directly (fast, no toolchain, no git repo,
-reliable in CI). A few black-box tests then drive ``guard_paths.py`` and
-``post_edit_py.py`` as real subprocesses over stdin to pin the exit-code
-contract Claude Code relies on (2 blocks, 0 allows) — under the current
-interpreter (``sys.executable``), not shelling out to uv/ruff/ty/pytest, so they
-stay fast. Under ``uv run pytest`` that interpreter is the project's 3.12 venv —
-the same one settings.json runs the live hooks under (``uv run … python``) — so
-the tests validate the interpreter the hooks actually use.
+reliable in CI). A black-box test then drives ``post_edit_py.py`` as a real
+subprocess over stdin to pin the exit-code contract Claude Code relies on (0
+lets the edit through) — under the current interpreter (``sys.executable``), not
+shelling out to uv/ruff/ty/pytest, so it stays fast. Under ``uv run pytest`` that
+interpreter is the project's 3.12 venv — the same one settings.json runs the live
+hooks under (``uv run … python``) — so the tests validate the interpreter the
+hooks actually use.
+
+There is no path-guard hook to cover: the ``uv.lock`` / ``.streamlit/secrets.toml``
+/ ``.git`` protections moved to ``permissions.deny`` rules in settings.json, which
+the permission engine enforces ahead of any hook (see CLAUDE.md's Hooks section).
 
 The scripts live outside any importable package, so they're loaded by file path
 via ``importlib``; importing only defines functions (the work is behind an
@@ -45,7 +47,6 @@ def _load(name: str):
     return load_script(HOOKS_DIR / f"{name}.py", f"_hook_{name}")
 
 
-guard = _load("guard_paths")
 post_edit = _load("post_edit_py")
 pytest_stop = _load("pytest_stop")
 
@@ -60,44 +61,6 @@ def _run_hook(name: str, payload: dict) -> subprocess.CompletedProcess:
         env={"CLAUDE_PROJECT_DIR": str(ROOT)},
         cwd=str(ROOT),
     )
-
-
-# --------------------------------------------------------------------------- #
-# PreToolUse guard: protected_reason
-# --------------------------------------------------------------------------- #
-@pytest.mark.parametrize(
-    "rel",
-    [
-        "uv.lock",  # lock file: uv owns it, never hand-edited
-        "sub/uv.lock",  # matched by basename, anywhere in the tree
-        ".streamlit/secrets.toml",  # gitignored secrets, matched repo-relative
-        ".git/config",  # git internals, matched by path segment
-        ".git/hooks/pre-commit",
-    ],
-)
-def test_guard_blocks_protected_paths(tmp_path, rel):
-    # The reason is the repo-relative path, surfaced back to Claude on a block.
-    reason = guard.protected_reason(str(tmp_path / rel), str(tmp_path))
-    assert reason == rel
-
-
-@pytest.mark.parametrize(
-    "rel",
-    [
-        "streamlit_app.py",
-        "highcharts_builder.py",
-        "pyproject.toml",
-        "tests/test_smoke.py",
-        ".streamlit/config.toml",  # the committed theme config IS editable
-    ],
-)
-def test_guard_allows_normal_paths(tmp_path, rel):
-    assert guard.protected_reason(str(tmp_path / rel), str(tmp_path)) is None
-
-
-def test_guard_empty_path_is_allowed():
-    # A missing file_path must not blow up or block — nothing to protect.
-    assert guard.protected_reason("", None) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -137,7 +100,7 @@ def test_post_edit_skips_empty_path():
         " M a.txt\n M highcharts_builder.py\n",  # .py alongside a non-.py
         "R  old.py -> renamed.py\n",  # rename: new side is .py
         "R  legacy.py -> legacy.txt\n",  # rename: old side was .py (still counts)
-        "?? .claude/hooks/guard_paths.py\n",  # hook scripts ARE tested (test_hooks.py)
+        "?? .claude/hooks/post_edit_py.py\n",  # hook scripts ARE tested (test_hooks.py)
     ],
 )
 def test_dirty_python_detects_changes(porcelain):
@@ -162,23 +125,6 @@ def test_dirty_python_ignores_non_app_changes(porcelain):
 # --------------------------------------------------------------------------- #
 # Exit-code contract (black-box, python3-only — no uv/ruff/ty/pytest spawned)
 # --------------------------------------------------------------------------- #
-def test_guard_subprocess_blocks_with_exit_2():
-    # PreToolUse blocks by exiting 2 with the reason on stderr (fed to Claude).
-    proc = _run_hook(
-        "guard_paths", {"tool_input": {"file_path": str(ROOT / "uv.lock")}}
-    )
-    assert proc.returncode == 2
-    assert "uv.lock" in proc.stderr
-
-
-def test_guard_subprocess_allows_normal_file_with_exit_0():
-    proc = _run_hook(
-        "guard_paths", {"tool_input": {"file_path": str(ROOT / "streamlit_app.py")}}
-    )
-    assert proc.returncode == 0
-    assert proc.stderr == ""
-
-
 def test_post_edit_subprocess_noops_on_non_python():
     # A non-.py edit exits 0 immediately, before any toolchain is invoked.
     proc = _run_hook(
@@ -193,8 +139,8 @@ def test_post_edit_subprocess_noops_on_non_python():
 # The hooks look up subprocess.run and sys.stdin at call time on the (shared)
 # stdlib modules, so patching those on the imported hook module reaches the live
 # code; monkeypatch reverts after each test. capsys captures what the hook writes
-# to stderr. These cover the exit-code contract the black-box tests above can't
-# reach without a real toolchain (their wiped PATH short-circuits first).
+# to stderr. These cover the exit-code contract the black-box test above can't
+# reach without a real toolchain (its wiped PATH short-circuits first).
 # --------------------------------------------------------------------------- #
 class _FakeProc:
     def __init__(self, returncode=0, stdout="", stderr=""):
@@ -393,33 +339,6 @@ def test_dirty_python_git_error_runs_suite(monkeypatch):
         _fake_run(lambda cmd: _FakeProc(128, stderr="fatal: not a git repo\n")),
     )
     assert pytest_stop._dirty_python(None) is True
-
-
-# ---- guard_paths: fail-open + the root-less / outside-root match branches --- #
-def test_guard_main_malformed_stdin_fails_open(monkeypatch, capsys):
-    _feed_stdin(monkeypatch, "not json{")
-    assert guard.main() == 0  # fail open, never block on a bad payload
-    assert capsys.readouterr().err == ""
-
-
-def test_guard_protects_basename_and_git_without_root():
-    # root=None: the raw absolute path still matches by basename / .git segment.
-    assert guard.protected_reason("/anywhere/uv.lock", None) == "/anywhere/uv.lock"
-    assert guard.protected_reason("/x/.git/config", None) == "/x/.git/config"
-
-
-def test_guard_protects_secrets_without_root():
-    # Path-tail match: secrets.toml is guarded even when the root can't be
-    # resolved and the path stays absolute (it has no distinctive basename).
-    p = "/whatever/.streamlit/secrets.toml"
-    assert guard.protected_reason(p, None) == p
-
-
-def test_guard_blocks_git_outside_root(tmp_path):
-    # A path outside the project root trips relative_to's ValueError, then matches
-    # on the raw path's .git segment (fall-back-to-raw-path branch).
-    outside = "/some/other/repo/.git/config"
-    assert guard.protected_reason(outside, str(tmp_path)) == outside
 
 
 # ---- has_dirty_python: git C-quoted / non-ASCII porcelain paths ------------- #
