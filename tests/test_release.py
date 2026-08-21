@@ -141,10 +141,23 @@ def test_to_release_accepts_a_bare_version_without_the_v_prefix():
 
 
 def test_to_release_with_no_watermark_does_only_the_current_version():
-    # No releases yet (or the tag lookup failed): be conservative, never back-fill
-    # the whole history — this repo's 0.1.0–0.6.0 carry tags but no releases.
+    # No releases yet: be conservative, never back-fill the whole history — this
+    # repo's 0.1.0–0.6.0 carry tags but no releases. This is the *only* state that
+    # reaches here as an empty watermark; the workflow now fails on a gh error
+    # rather than passing "" for it, so the two can no longer be confused.
     assert release.versions_to_release(SAMPLE, "") == ["0.11.0"]
     assert release.versions_to_release(SAMPLE, None) == ["0.11.0"]
+
+
+def test_to_release_raises_on_a_watermark_that_is_not_a_changelog_version():
+    # The fail-open bug: this branch used to return EVERY version in the file, which
+    # in the real repo means resurrecting the deliberately release-less 0.1.0–0.6.0.
+    # Reachable from a hand-cut release whose tag has no `## [x.y.z]` section.
+    with pytest.raises(ValueError, match="not a CHANGELOG"):
+        release.versions_to_release(SAMPLE, "v9.9.9")
+    # The failure must name the tag as the caller passed it, `v` prefix and all.
+    with pytest.raises(ValueError, match="v0.18.1"):
+        release.versions_to_release(SAMPLE, "v0.18.1")
 
 
 # --------------------------------------------------------------------------- #

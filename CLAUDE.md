@@ -105,9 +105,15 @@ with Highcharts. Every chart is produced by the Highcharts for Python toolkit
   `.claude/settings.local.json` holds per-developer overrides and is gitignored.
 - `pyproject.toml` — dependencies + the `dev` group, the project license (MIT, via the
   PEP 639 `license`/`license-files` fields), and the Ruff/ty config.
-- `.github/workflows/ci.yml` — GitHub Actions: four jobs. Three gates (pytest, Ruff
-  lint/format, ty) that `uv sync --locked` then run the same checks the hooks mirror,
-  on every push to `main` and every PR; then a `release` job that `needs` all three,
+- `.github/workflows/ci.yml` — GitHub Actions: two jobs. A `gates` job that
+  `uv sync --locked` **once**, then runs the three checks the hooks mirror (Ruff
+  lint/format, ty, pytest) as separate steps on every push to `main` and every PR.
+  Each gate step carries `if: !cancelled() && steps.sync.outcome == 'success'`, and
+  that is what makes one job as informative as the three it replaced: a step failure
+  no longer skips the rest, so a single push reports lint **and** type **and** test
+  status rather than only the first to break — while a failed step still fails the
+  job. Ruff and ty run before pytest so a lint or type error reports in seconds
+  rather than after the suite. Then a `release` job that `needs` it,
   runs on a push to `main` only, and — under a job-scoped `contents: write` over the
   top-level read-only token — cuts a `v{version}` tag + GitHub release for **every**
   `CHANGELOG.md` version above the latest released one (the watermark). Releasing
@@ -125,7 +131,12 @@ with Highcharts. Every chart is produced by the Highcharts for Python toolkit
   `version`, `notes VERSION` (raising if the section is absent or empty so a release is
   never cut blank), and `to-release LATEST_TAG` (oldest-first; just the current version
   when the repo has no releases, so it never back-fills the deliberately release-less
-  `0.1.0`–`0.6.0` tags). It only *reads* facts already pinned elsewhere by
+  `0.1.0`–`0.6.0` tags — and **raising** on a watermark that is present but is not a
+  changelog version, which used to fail *open* and return every version in the file,
+  resurrecting those same six). The workflow feeds it a watermark only from a `gh` call
+  whose failure is an **error**: `gh release view` exits 1 both for "no releases yet" and
+  for a transient 5xx, and swallowing that status made a blip read as the former — which
+  releases only the current version and drops intermediate ones permanently, green. It only *reads* facts already pinned elsewhere by
   `test_changelog_documents_the_current_version` — which now reuses this module's
   `changelog_versions` rather than re-encoding the heading regex — so the notes
   cannot drift from the changelog. Pure logic + a thin `main()`, the `.claude/hooks/`

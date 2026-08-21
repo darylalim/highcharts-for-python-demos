@@ -4,10 +4,10 @@
 Fires after Edit/Write/MultiEdit. For a ``.py`` file it:
 
 1. runs ``ruff check --fix`` then ``ruff format`` on the file (mirrors the CI
-   "Lint & format (Ruff)" gate) — deterministic and safe to apply unattended,
-   so the edit lands lint-clean and formatted; and
-2. runs ``ty check`` on the project (mirrors the CI "Type check (ty)" gate; ty
-   needs the whole project to resolve pandas/streamlit/highcharts-core imports).
+   Ruff lint/format gate) — deterministic and safe to apply unattended, so the
+   edit lands lint-clean and formatted; and
+2. runs ``ty check`` on the project (mirrors the CI ty gate; ty needs the whole
+   project to resolve pandas/streamlit/highcharts-core imports).
    On type errors (ty exit 1) it exits 2 so the diagnostics are fed back to
    Claude to fix; a ty tooling/env failure (exit >=2, e.g. an unsynced venv) is
    left as a silent no-op rather than mislabeled to Claude as type errors.

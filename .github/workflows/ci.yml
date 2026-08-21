@@ -5,96 +5,81 @@ on:
     branches: [main]
   pull_request:
 
-# Least privilege: the workflow only needs to read the repo.
 permissions:
   contents: read
 
 # Cancel superseded runs on the same ref — but only for PRs (rapid pushes to a
-# branch under review). Pushes to main are NOT cancelled: they serialize in this
-# group instead, so the release job below can never be killed mid-run (which could
-# strand a tag with no release), and a queued main run still re-checks on its turn.
+# branch under review). An IN-PROGRESS main run is never cancelled, so the release
+# job below can't be killed mid-run and strand a pushed tag with no release. A
+# PENDING one still can be (a concurrency group holds at most one), which is safe
+# only because the release job is catch-up rather than incremental: it cuts every
+# version above the watermark, so a superseded run's bump is picked up by the next.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    name: Test (Python 3.12)
+  gates:
+    name: Gates (Ruff · ty · pytest)
     runs-on: ubuntu-latest
+    # Measured runtime is under a minute. The default is 360, and with
+    # cancel-in-progress false for main a hung run would hold the concurrency
+    # group — and every release behind it — for that whole time.
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           enable-cache: true
 
-      # No setup-python step: `uv sync` reads .python-version (3.12) and
-      # fetches a matching managed interpreter automatically if one isn't present.
+      # One sync for all three gates. No setup-python step: `uv sync` reads
+      # .python-version (3.12) and fetches a matching managed interpreter
+      # automatically if one isn't present. The sync is required, not merely a
+      # pin: ty resolves third-party imports (pandas, streamlit, highcharts-core)
+      # from the project venv, and Ruff runs from it too so its version has one
+      # source of truth — pyproject.toml's dev group via uv.lock — with no
+      # hardcoded version literals to drift.
       - name: Install dependencies (locked)
+        id: sync
         run: uv sync --locked
 
-      - name: Run tests
-        run: uv run pytest
-
-  lint:
-    name: Lint & format (Ruff)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-        with:
-          enable-cache: true
-
-      # Run Ruff from the locked venv so its version has one source of truth —
-      # pyproject.toml's dev group via uv.lock — with no hardcoded version
-      # literals to drift. Both gates are non-mutating; --output-format=github
-      # annotates PRs inline.
-      - name: Install dependencies (locked)
-        run: uv sync --locked
-
+      # `!cancelled() && sync succeeded` on every gate is what makes one job as
+      # informative as the three it replaces: a step failure no longer skips the
+      # rest, so a single push reports lint AND type AND test status instead of
+      # only the first to break. A failed step still fails the job. Ruff and ty
+      # run before pytest so a lint or type error reports in seconds rather than
+      # after the suite. --output-format=github annotates PRs inline.
       - name: Ruff lint
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
         run: uv run ruff check --output-format=github .
 
       - name: Ruff format check
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
         run: uv run ruff format --check .
 
-  typecheck:
-    name: Type check (ty)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-        with:
-          enable-cache: true
-
-      # ty resolves third-party imports (pandas, streamlit, highcharts-core)
-      # from the project venv, so the sync is required here, not just pinning.
-      # `uv run` uses the ty pinned in the dev group (uv.lock).
-      # --output-format=github annotates PRs inline.
-      - name: Install dependencies (locked)
-        run: uv sync --locked
-
       - name: ty check
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
         run: uv run ty check --output-format=github
+
+      - name: Run tests
+        if: ${{ !cancelled() && steps.sync.outcome == 'success' }}
+        run: uv run pytest
 
   release:
     name: Release (tag + GitHub release)
-    needs: [test, lint, typecheck]
-    # Only on a push to main, and only after all three gates are green — never on
-    # a PR. So a release can only ever be cut from a fully-passing main.
+    needs: [gates]
+    # A release can only ever be cut from a fully-passing main.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Scoped to this job alone, so the gate jobs above keep the top-level
+    timeout-minutes: 5
+    # Scoped to this job alone, so the gate job above keeps the top-level
     # least-privilege read-only token; only this one may create tags and releases.
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Full history is load-bearing: an older un-released version (two bumps
           # in one push) is tagged at the commit that INTRODUCED it, found by a
@@ -122,16 +107,25 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           # The latest release is the watermark; anything above it still needs one.
-          latest="$(gh release view --json tagName -q .tagName 2>/dev/null || true)"
-          to_cut="$($PY to-release "$latest")"
-
-          if [ -z "$to_cut" ]; then
-            echo "Nothing above the latest release (${latest:-none}) — nothing to cut."
-            exit 0
+          # `gh release view` exits 1 both when there are genuinely no releases and
+          # on any transient auth/5xx failure, so swallowing its status conflated the
+          # two: a blip read as "no releases", and an empty watermark releases only
+          # the current version — silently dropping intermediate ones, permanently,
+          # and green. So probe for existence with a call whose failure IS an error,
+          # and let `set -e` see it. (release list orders by date, and this job
+          # deliberately creates older versions with --latest=false, so its first row
+          # is only a presence signal — the watermark itself still comes from view.)
+          if ! releases="$(gh release list --limit 1 --json tagName -q '.[].tagName')"
+          then
+            echo "::error::Could not read the release list — refusing to guess the watermark."
+            exit 1
           fi
-
-          # The current (highest) version — read only now that there's work to do.
-          current="$($PY version)"
+          latest=""
+          [ -n "$releases" ] && latest="$(gh release view --json tagName -q .tagName)"
+          to_cut="$($PY to-release "$latest")"
+          echo "Latest release: ${latest:-none}. To cut: ${to_cut:-nothing}."
+          [ -n "$to_cut" ] || exit 0
+          current="$($PY version)"  # the highest; read only now there's work to do
 
           # to_cut is oldest-first; version strings are whitespace-free tokens.
           for version in $to_cut; do
@@ -172,7 +166,11 @@ jobs:
               git push origin "$tag"
             fi
 
-            gh release create "$tag" \
+            # --verify-tag: without it gh CREATES a missing tag at the default
+            # branch's HEAD, which for an older version would silently point its tag
+            # at main instead of its bump commit. Every path above pushes the tag
+            # first, so this is defence in depth against a wrong-but-green release.
+            gh release create "$tag" --verify-tag \
               --title "$tag" \
               --notes-file "$notes" \
               --latest="$latest_flag"

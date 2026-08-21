@@ -90,13 +90,25 @@ def versions_to_release(changelog_text: str, latest_released: str | None) -> lis
     that matches the old single-version behaviour rather than back-filling the
     entire history (this repo's ``0.1.0``–``0.6.0`` carry tags but deliberately no
     releases; the watermark keeps the job from resurrecting them).
+
+    A watermark that is *present but not a changelog version* raises ``ValueError``.
+    That branch used to fail **open** — it treated every version as newer and
+    returned the whole file, resurrecting exactly the ``0.1.0``–``0.6.0`` the
+    paragraph above promises never to release, and doing it green (each of those
+    sections is non-empty, so ``extract_release_notes`` would not object either).
+    It is reachable from a hand-cut release whose tag has no ``## [x.y.z]`` section,
+    or from trimming old entries out of ``CHANGELOG.md``. Failing loudly is the same
+    choice ``extract_release_notes`` makes about missing notes.
     """
     versions = changelog_versions(changelog_text)  # newest-first
     watermark = (latest_released or "").lstrip("v")
     if not watermark:
         return versions[:1]
-    cut = versions.index(watermark) if watermark in versions else len(versions)
-    return versions[:cut][::-1]
+    if watermark not in versions:
+        raise ValueError(
+            f"latest release {latest_released!r} is not a CHANGELOG.md version"
+        )
+    return versions[: versions.index(watermark)][::-1]
 
 
 def main(argv: list[str] | None = None) -> int:
