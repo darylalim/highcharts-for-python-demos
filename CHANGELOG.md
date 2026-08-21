@@ -122,6 +122,28 @@ Dates are the last commit at that version — the point it stopped being current
 
 ### Removed
 
+- **Light mode, entirely.** The `dark=` flag is gone from `build_options`, `make_chart`,
+  `build_chart_html` and `build_chart_png`, from the three `@st.cache_data` wrappers and their
+  call sites, and `streamlit_app.py` no longer reads `st.context.theme` at all. `_themed` applies
+  the chrome unconditionally. The argument is that a mode nothing can select is not a supported
+  mode: the config is a single `[theme]`, so every viewer got dark, and the light path survived
+  only in tests that asserted its **hexes** rather than its legibility — against a palette tuned
+  for dark, its eight hues ran 1.67–2.77:1 on white. "Covered" did not mean "good", and keeping
+  it meant shipping a claim of support nothing checked.
+  What it trades away is stated rather than tidied: the chart's chrome no longer *follows* the
+  shell, it assumes it, so restoring `[theme.light]`/`[theme.dark]` would put dark charts on a
+  light shell with nothing at runtime objecting — which is what makes
+  `test_app_theme_is_a_single_mode_with_no_light_dark_toggle` load-bearing rather than tidy.
+  Removal also surfaced a smell worth keeping: a colour written at build time and then
+  *overwritten* by `_themed` is a second mode still hiding. `_HEATMAP_GRADIENT`, `_HEATMAP_NULL`
+  (and so `_GAUGE_TRACK_COLOR`) and `_BULLET_TARGET_COLOR` were each exactly that; each now holds
+  its final value at its single write, and `_themed` lost two whole branches that were writing
+  values which never differed. `_LIGHT_COLOR_SCHEME_CSS` stays: it pins how Highcharts' own
+  `light-dark()` defaults resolve so the iframe agrees with the export server, which was never
+  about our flag.
+  Eighteen light-mode tests went with it, but the ones pinning theme-*independent* choices — a
+  reversed heatmap axis, tooltip formats, disabled legends — were kept and renamed rather than
+  deleted, since none of them was ever about light mode.
 - **The one-rerun theme lag is no longer reachable.** A *manual* mid-session light/dark switch was
   applied frontend-side with no Python rerun, so the chart kept the previous mode's chrome until the
   next interaction — pre-existing Streamlit behaviour rather than a bug here, and never fixable from

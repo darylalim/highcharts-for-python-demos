@@ -26,8 +26,7 @@ with Highcharts. Every chart is produced by the Highcharts for Python toolkit
   `st.multiselect` on wide CSVs, plus the type-specific extra column selectors),
   caching, a KPI metric row (its third metric adapts to the chart type via
   `MARK_METRICS` — see [Chart types](#chart-types)), the render-mode selector
-  (interactive iframe / static PNG), reading the active light/dark theme
-  (`st.context.theme.type`) so charts render theme-aware, the chart embed, and a
+  (interactive iframe / static PNG), the chart embed, and a
   toggle revealing the generated Highcharts config (JS). The **no-plottable-columns
   gate** runs *below* the chart-type selectbox and is **type-aware**: xrange's
   start/end are coordinates and may be dates, and a date column is object dtype, so
@@ -162,9 +161,15 @@ png = build_chart_png(df, chart_type, x_col, y_cols, title=title)
 message = explain_export_failure(exc)  # plain markdown; the module stays Streamlit-free
 ```
 
-All three take an optional `dark=` flag (default `False`) theming the chart chrome;
-the app derives it from `st.context.theme.type` and threads it through the cached
-renderers, so it is part of their cache key.
+None of them takes a mode flag. `_themed` applies the chrome unconditionally, because
+`.streamlit/config.toml` is a single `[theme]` and every viewer therefore gets the dark
+shell — a light chart could only ever be a mismatch. The `dark=` flag that used to thread
+from `st.context.theme.type` through the cached renderers is **gone**, along with the light
+values it selected: a mode nothing could select, whose palette was tuned for the other one,
+was a claim of support the tests could not actually check (they asserted its hexes, not its
+legibility). What that trades away is self-correction — the chart no longer *follows* the
+shell, it assumes it — which is why
+`test_app_theme_is_a_single_mode_with_no_light_dark_toggle` is load-bearing.
 
 Beyond `x_col`/`y_cols`, a type may take one of **9 extra column kwargs**, and
 which types share one is a deliberate claim — *a link is a link, but a goal is not a
@@ -230,7 +235,7 @@ server (`export.highcharts.com`).
 **Verify by rendering** (the methodology this project cites everywhere — a new type's
 `_themed` hook, null/edge-case geometry, and light↔dark / interactive↔PNG parity are
 *decided by looking*, never inferred from a base class): render one chart to a file with
-`build_chart_html(df, type, …, dark=…)`, serve it over `http://localhost`
+`build_chart_html(df, type, …)`, serve it over `http://localhost`
 (`python3 -m http.server PORT --directory <dir>` in the background — `file://` is blocked
 by the Claude-in-Chrome extension), then screenshot it in a browser in **both** themes.
 Run scratchpad scripts with `PYTHONPATH=<repo> uv run python …` — the script's own dir,
@@ -478,9 +483,11 @@ conventions in their original, fully-enumerated form).
   `test_no_series_colour_collides_with_the_chart_chrome` is the guard that keeps any future theme
   from walking a chrome value back into the categorical scale. The palette's **order** is load-bearing beyond its hues — `_WATERFALL_*` and
   `_BOXPLOT_OUTLIER_COLOR` index into it, so a reshuffle repaints "a rise" and "a loss".
-  The palette is shared across light/dark; only the chart chrome flips, via
-  `build_options(..., dark=...)` / `_DARK_CHROME`. The app itself now resolves to dark for
-  every viewer, but `dark=False` stays a supported builder input and stays covered.
+  There is one mode: `_themed` applies `_DARK_CHROME` to every chart, and nothing selects
+  between alternatives. A constant that is written at build time and then overwritten by
+  `_themed` is the smell that a second mode is still hiding — `_HEATMAP_GRADIENT`,
+  `_HEATMAP_NULL` and `_BULLET_TARGET_COLOR` were each exactly that, and now hold their final
+  value at their single write.
   Two exceptions: `heatmap` colors its cells by a sequential `colorAxis` rather than the
   categorical palette, and `bullet`'s goal crossbar is the only place a **mark** flips rather
   than chrome — it necessarily crosses both the bar and the background, so a fixed colour

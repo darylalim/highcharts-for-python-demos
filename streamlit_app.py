@@ -171,7 +171,6 @@ def cached_chart_html(
     y_cols,
     height,
     title,
-    dark,
     size_col,
     target_col,
     parent_col,
@@ -191,7 +190,6 @@ def cached_chart_html(
         list(y_cols),
         height=height,
         title=title,
-        dark=dark,
         size_col=size_col,
         target_col=target_col,
         parent_col=parent_col,
@@ -216,7 +214,6 @@ def cached_chart_png(
     y_cols,
     height,
     title,
-    dark,
     size_col,
     target_col,
     parent_col,
@@ -236,7 +233,6 @@ def cached_chart_png(
         list(y_cols),
         height=height,
         title=title,
-        dark=dark,
         size_col=size_col,
         target_col=target_col,
         parent_col=parent_col,
@@ -258,7 +254,6 @@ def cached_chart_js(
     x_col,
     y_cols,
     title,
-    dark,
     size_col,
     target_col,
     parent_col,
@@ -279,7 +274,6 @@ def cached_chart_js(
         x_col,
         list(y_cols),
         title=title,
-        dark=dark,
         size_col=size_col,
         target_col=target_col,
         parent_col=parent_col,
@@ -1176,31 +1170,17 @@ with left.container(border=True, height="stretch"):
         )
         st.badge(badge_label, icon=badge_icon, color=badge_color)
 
-    # The chart renders in an iframe / server PNG that the shell theme can't
-    # reach, so read the active light/dark mode and let the builder flip the
-    # chart's chrome to match. `dark` is part of every renderer's cache key, so
-    # each mode caches independently.
+    # No theme is read here, and that is the decision rather than an omission. The builder
+    # has no `dark` flag any more: .streamlit/config.toml is a single [theme], so every
+    # viewer resolves to the dark shell and a light chart could only ever be a mismatch.
+    # Deriving a flag from st.context.theme.type would now be theatre — one branch that
+    # cannot vary, plus a cache key that cannot vary with it.
     #
-    # config.toml is a single [theme] with no [theme.light]/[theme.dark], which locks
-    # the app to dark and removes the settings-menu toggle — so this resolves to True
-    # for every viewer today. It is still READ rather than hardcoded: the mode is the
-    # config's decision to make (pinned by test_app_theme_is_a_single_mode_with_no_
-    # light_dark_toggle), and restoring the two subtables must restore the behaviour
-    # here without touching this file. It also kept the one-rerun lag that a *manual*
-    # mid-session switch used to cause — applied frontend-side with no Python rerun —
-    # from being reachable at all.
-    #
-    # On the getattr pair, because the obvious reading of it is wrong: st.context.theme is
-    # NOT absent under AppTest. streamlit/runtime/context.py returns StreamlitTheme({"type":
-    # None}) whenever there is no script-run context, and that mapping resolves .type to
-    # None — so neither default here is reachable, and `dark` lands False only because
-    # None != "dark". The getattr stays as cheap insurance across Streamlit versions, but it
-    # is insurance, not the mechanism: if `type` ever became an enum or took a non-None
-    # default, the fallback would NOT catch it and every render would silently pin to light
-    # chrome on a dark-only shell. Anything depending on that path should assert the value,
-    # not trust these defaults.
-    _theme = getattr(st.context, "theme", None)
-    dark = getattr(_theme, "type", "light") == "dark"
+    # What that trades away is self-correction: the chart's chrome no longer FOLLOWS the
+    # shell, it assumes it. Restoring [theme.light]/[theme.dark] would put dark charts on a
+    # light shell with nothing at runtime objecting, which is why
+    # test_app_theme_is_a_single_mode_with_no_light_dark_toggle is load-bearing rather than
+    # tidy: it is the only thing standing between that edit and a silently wrong render.
 
     if render_mode == MODE_STATIC:
         # Server-side render: no Highcharts JS runs in the browser.
@@ -1212,7 +1192,6 @@ with left.container(border=True, height="stretch"):
                 tuple(y_cols),
                 height,
                 title,
-                dark,
                 size_col=size_col,
                 target_col=target_col,
                 parent_col=parent_col,
@@ -1255,7 +1234,6 @@ with left.container(border=True, height="stretch"):
             tuple(y_cols),
             height,
             title,
-            dark,
             size_col=size_col,
             target_col=target_col,
             parent_col=parent_col,
@@ -1291,7 +1269,6 @@ with left.container(border=True, height="stretch"):
             x_col,
             tuple(y_cols),
             title,
-            dark,
             size_col=size_col,
             target_col=target_col,
             parent_col=parent_col,

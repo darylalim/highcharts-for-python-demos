@@ -883,7 +883,6 @@ def test_dark_mode_sets_chart_background(labeled_frame, chart_type):
         chart_type,
         "label",
         ["value"],
-        dark=True,
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -897,34 +896,12 @@ def test_dark_mode_sets_chart_background(labeled_frame, chart_type):
 
 
 @pytest.mark.parametrize("chart_type", SUPPORTED_TYPES)
-def test_light_mode_leaves_chart_background_unset(labeled_frame, chart_type):
-    # Light mode is a no-op: no backgroundColor is injected, so the output is
-    # exactly what it was before dark mode existed.
-    opts = build_options(
-        labeled_frame,
-        chart_type,
-        "label",
-        ["value"],
-        size_col=_size_for(chart_type),
-        target_col=_target_for(chart_type),
-        parent_col=_parent_for(chart_type),
-        end_col=_end_for(chart_type),
-        high_col=_high_for(chart_type),
-        goal_col=_goal_for(chart_type),
-        width_col=_width_for(chart_type),
-        after_col=_after_for(chart_type),
-    )
-    assert "backgroundColor" not in opts["chart"]
-
-
-@pytest.mark.parametrize("chart_type", SUPPORTED_TYPES)
 def test_dark_mode_keeps_the_shared_palette(labeled_frame, chart_type):
     opts = build_options(
         labeled_frame,
         chart_type,
         "label",
         ["value"],
-        dark=True,
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -940,7 +917,7 @@ def test_dark_mode_keeps_the_shared_palette(labeled_frame, chart_type):
 def test_dark_mode_themes_cartesian_axes_text_and_legend():
     # Two series so the legend is enabled and its recoloring is meaningful.
     df = pd.DataFrame({"x": ["a", "b"], "y": [1, 2], "z": [3, 4]})
-    opts = build_options(df, "line", "x", ["y", "z"], dark=True)
+    opts = build_options(df, "line", "x", ["y", "z"])
     assert opts["title"]["style"]["color"] == "#f1f5f9"
     # Axis labels + title, and the line/tick/gridline colors, all flip.
     assert opts["xAxis"]["labels"]["style"]["color"] == "#94a3b8"
@@ -961,17 +938,17 @@ def test_dark_mode_matches_column_bar_borders_to_the_background(chart_type):
     # mode — the pie/treemap/sankey slice-gap rule, which these two were missing. The
     # cartesian branch emits no plotOptions, so the hook must create it.
     df = pd.DataFrame({"x": ["a", "b"], "y": [1, 2]})
-    opts = build_options(df, chart_type, "x", ["y"], dark=True)
+    opts = build_options(df, chart_type, "x", ["y"])
     assert opts["plotOptions"][chart_type]["borderColor"] == "#0f172a"
     # The line family draws no such border, so it stays untouched (no dead plotOptions).
-    assert "plotOptions" not in build_options(df, "line", "x", ["y"], dark=True)
-    # Light mode is the documented no-op: no border injected at all.
-    assert "plotOptions" not in build_options(df, chart_type, "x", ["y"])
+    # This is the assertion that keeps the hook TARGETED now that there is no light mode to
+    # contrast it against: it fires only for the types that draw a border, not for every type.
+    assert "plotOptions" not in build_options(df, "line", "x", ["y"])
 
 
 def test_dark_mode_themes_pie_labels_and_skips_axes():
     df = pd.DataFrame({"name": ["A", "B"], "v": [1.0, 2.0]})
-    opts = build_options(df, "pie", "name", ["v"], dark=True)
+    opts = build_options(df, "pie", "name", ["v"])
     assert opts["chart"]["backgroundColor"] == "#0f172a"
     assert opts["plotOptions"]["pie"]["dataLabels"]["color"] == "#f1f5f9"
     # Pie has no axes, so the axis-theming loop must simply skip it (not crash).
@@ -987,7 +964,6 @@ def test_dark_mode_themes_the_tooltip(labeled_frame, chart_type):
         chart_type,
         "label",
         ["value"],
-        dark=True,
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -1009,36 +985,26 @@ def test_dark_mode_tooltip_merge_preserves_pie_point_format():
         "pie",
         "name",
         ["v"],
-        dark=True,
     )
     assert opts["tooltip"]["backgroundColor"] == "#0f172a"
     assert "point.percentage" in opts["tooltip"]["pointFormat"]
 
 
-def test_light_mode_leaves_tooltip_chrome_unset():
-    # Light mode stays a no-op: cartesian output has no tooltip key at all, and the
-    # pie tooltip keeps only its pointFormat with no injected dark chrome.
-    line = build_options(
-        pd.DataFrame({"x": ["a", "b"], "y": [1, 2]}), "line", "x", ["y"]
-    )
-    assert "tooltip" not in line
-    pie = build_options(
-        pd.DataFrame({"name": ["A", "B"], "v": [1.0, 2.0]}), "pie", "name", ["v"]
-    )
-    assert "backgroundColor" not in pie["tooltip"]
+def test_build_chart_html_body_background_matches_the_chart():
+    # The iframe body is painted to match the chart background, so no white flash shows at
+    # the edges or during load. One value now, not two: the builder has no light mode, so
+    # the assertion is that the body tracks _DARK_CHROME["bg"] rather than that it tracks a
+    # flag. The white it used to paint would now be a seam around every chart.
+    from highcharts_builder import _DARK_CHROME
 
-
-def test_build_chart_html_body_background_tracks_mode():
-    # The iframe body background is painted to match the chart so there's no
-    # light flash at the edges in dark mode; light stays white.
     df = pd.DataFrame({"x": ["a", "b"], "y": [1, 2]})
-    assert "background:#0f172a" in build_chart_html(df, "line", "x", ["y"], dark=True)
-    assert "background:#ffffff" in build_chart_html(df, "line", "x", ["y"])
+    html = build_chart_html(df, "line", "x", ["y"])
+    assert f"background:{_DARK_CHROME['bg']}" in html
+    assert "background:#ffffff" not in html
 
 
-@pytest.mark.parametrize("dark", [False, True])
 @pytest.mark.parametrize("chart_type", ["line", "boxplot"])
-def test_build_chart_html_pins_the_chart_color_scheme(chart_type, dark):
+def test_build_chart_html_pins_the_chart_color_scheme(chart_type):
     # Highcharts >= 13 defines its defaults as `light-dark()` CSS variables, so every
     # color we don't set explicitly would resolve against the VIEWER'S BROWSER rather
     # than our `dark` flag. Two real failures followed: a light-mode chart painted itself
@@ -1053,9 +1019,12 @@ def test_build_chart_html_pins_the_chart_color_scheme(chart_type, dark):
     # and since `color-scheme` inherits, that shadows an `html` rule for the SVG subtree —
     # so the pin has to sit at or below the container to win.
     df = pd.DataFrame({"g": ["a", "a", "b", "b"], "v": [1.0, 2.0, 3.0, 4.0]})
-    html = build_chart_html(df, chart_type, "g", ["v"], dark=dark)
+    html = build_chart_html(df, chart_type, "g", ["v"])
     assert ".highcharts-root{color-scheme:only light}" in html
-    # It is pinned regardless of mode — dark mode is expressed in the options, not here.
+    # `only light` even though the chart IS dark, and that is not a contradiction: this pins
+    # how Highcharts' own `light-dark()` DEFAULTS resolve, so that the iframe resolves them
+    # exactly as the export server does. Our dark chrome is expressed in the options, never
+    # here — which is why removing light mode did not make this pin removable.
     assert "color-scheme:only dark" not in html
 
 
@@ -1155,7 +1124,7 @@ def test_theme_colors_stay_in_sync_with_config():
     # its own chartCategoricalColors only to its own Vega/Plotly charts — of which this app
     # has none. So the theme is restated in highcharts_builder and guarded mechanically
     # here, rather than by cross-referencing comments on both sides.
-    from highcharts_builder import _DARK_CHROME, _HEATMAP_GRADIENT_DARK
+    from highcharts_builder import _DARK_CHROME, _HEATMAP_GRADIENT
 
     theme = _config_theme()
     # Fail with the reason, not a KeyError. Moving these colours down into [theme.light] /
@@ -1204,12 +1173,12 @@ def test_theme_colors_stay_in_sync_with_config():
     # "as one unit ... so the two can't drift if a key is ever added", so a `stops` list or a
     # `dataClasses` entry is planned for — and would make a .values() subset check fail
     # reporting a colour-scale problem that does not exist.
-    endpoints = {_HEATMAP_GRADIENT_DARK["minColor"], _HEATMAP_GRADIENT_DARK["maxColor"]}
+    endpoints = {_HEATMAP_GRADIENT["minColor"], _HEATMAP_GRADIENT["maxColor"]}
     assert endpoints <= set(sequential)
     # ...and that it IS a ramp: low end nearer the background than the high end. Reversed,
     # every heatmap would read inverted while every assertion above still passed.
-    assert sequential.index(_HEATMAP_GRADIENT_DARK["minColor"]) < sequential.index(
-        _HEATMAP_GRADIENT_DARK["maxColor"]
+    assert sequential.index(_HEATMAP_GRADIENT["minColor"]) < sequential.index(
+        _HEATMAP_GRADIENT["maxColor"]
     )
 
 
@@ -1442,9 +1411,7 @@ def test_bubble_tooltip_names_the_size_column_and_survives_dark_merge():
     assert "gdp" in fmt and "{point.x}" in fmt  # numeric x -> point.x
     # Dark mode merges chrome onto the tooltip without dropping the pointFormat
     # (the same merge the pie path relies on).
-    dark = build_options(
-        df, "bubble", "gdp", ["life"], size_col="population", dark=True
-    )
+    dark = build_options(df, "bubble", "gdp", ["life"], size_col="population")
     assert dark["tooltip"]["backgroundColor"] == "#0f172a"
     assert "population" in dark["tooltip"]["pointFormat"]
 
@@ -1501,7 +1468,7 @@ def test_radar_dark_mode_themes_the_polar_axes():
     # The polygon rings (yAxis gridlines) and the category labels must recolor in
     # dark mode, or the web is invisible against the dark background.
     df = pd.DataFrame({"attr": ["a", "b"], "p": [1, 2]})
-    opts = build_options(df, "radar", "attr", ["p"], dark=True)
+    opts = build_options(df, "radar", "attr", ["p"])
     assert opts["chart"]["backgroundColor"] == "#0f172a"
     assert opts["yAxis"]["gridLineColor"] == "#334155"
     assert opts["xAxis"]["labels"]["style"]["color"] == "#94a3b8"
@@ -1540,7 +1507,9 @@ def test_heatmap_builds_matrix_over_category_axes():
         [0, 1, 3.0],
         [1, 1, 4.0],
     ]
-    assert opts["colorAxis"]["maxColor"] == DEFAULT_COLORS[0]
+    from highcharts_builder import _HEATMAP_GRADIENT
+
+    assert opts["colorAxis"]["maxColor"] == _HEATMAP_GRADIENT["maxColor"]
     assert opts["colors"] == list(DEFAULT_COLORS)
     assert opts["legend"]["enabled"] is True
     # The Y categories are self-labelling, so Highcharts' default "Values" y-axis
@@ -1584,7 +1553,7 @@ def test_heatmap_dark_mode_themes_the_color_axis():
     # + muted labels) and recolor the empty-cell nullColor — or the color legend
     # renders light-on-dark.
     df = pd.DataFrame({"day": ["Mon", "Tue"], "AM": [1.0, 2.0]})
-    opts = build_options(df, "heatmap", "day", ["AM"], dark=True)
+    opts = build_options(df, "heatmap", "day", ["AM"])
     assert opts["chart"]["backgroundColor"] == "#0f172a"
     assert opts["colorAxis"]["minColor"] == "#0c4a6e"
     assert opts["colorAxis"]["maxColor"] == "#7dd3fc"
@@ -1632,8 +1601,6 @@ def test_heatmap_light_mode_shape():
     # and the light nullColor/minColor are deliberate and otherwise unguarded.
     df = pd.DataFrame({"day": ["Mon", "Tue"], "AM": [1.0, 2.0]})
     opts = build_options(df, "heatmap", "day", ["AM"])
-    assert opts["colorAxis"]["minColor"] == "#e0ecff"
-    assert opts["plotOptions"]["heatmap"]["nullColor"] == "#f1f5f9"
     assert opts["yAxis"]["reversed"] is True
     assert opts["series"][0]["name"] == "value"
     assert opts["tooltip"]["headerFormat"] == ""
@@ -1715,7 +1682,7 @@ def test_treemap_dark_mode_themes_tiles_and_skips_axes():
     # labels sit on the palette-colored tile, not the chart background, so the same
     # value stays legible in both themes.
     df = pd.DataFrame({"name": ["A", "B"], "v": [1.0, 2.0]})
-    opts = build_options(df, "treemap", "name", ["v"], dark=True)
+    opts = build_options(df, "treemap", "name", ["v"])
     assert opts["chart"]["backgroundColor"] == "#0f172a"
     assert opts["plotOptions"]["treemap"]["borderColor"] == "#0f172a"
     assert opts["plotOptions"]["treemap"]["dataLabels"]["color"] == "contrast"
@@ -1756,8 +1723,6 @@ def test_treemap_light_mode_shape():
     assert labels["enabled"] is True
     assert labels["format"] == "{point.name}<br>{point.value}"
     assert labels["color"] == "contrast"
-    # Light mode injects no dark chrome onto the tooltip (a no-op, as elsewhere).
-    assert "backgroundColor" not in opts["tooltip"]
 
 
 # --------------------------------------------------------------------------- #
@@ -1817,7 +1782,7 @@ def test_funnel_family_dark_mode_themes_labels_and_border(chart_type):
     # into the dark background (borderColor). Keyed by the concrete chart.type, so pyramid themes
     # through its own plotOptions key.
     df = pd.DataFrame({"stage": ["A", "B"], "v": [1.0, 2.0]})
-    opts = build_options(df, chart_type, "stage", ["v"], dark=True)
+    opts = build_options(df, chart_type, "stage", ["v"])
     assert opts["chart"]["backgroundColor"] == "#0f172a"
     po = opts["plotOptions"][chart_type]
     assert (
@@ -1871,8 +1836,6 @@ def test_funnel_family_light_mode_shape(chart_type):
     assert plot["dataLabels"]["enabled"] is True
     assert plot["dataLabels"]["format"] == "{point.name}: {point.y}"
     assert "colorByPoint" not in plot  # inherited from pie's default, never set here
-    # Light mode injects no dark chrome onto the tooltip (a no-op, as elsewhere).
-    assert "backgroundColor" not in opts["tooltip"]
 
 
 def test_pyramid_is_its_own_series_type_not_a_reversed_funnel():
@@ -2096,9 +2059,6 @@ def test_sankey_light_mode_shape():
     assert opts["legend"]["enabled"] is False
     assert opts["tooltip"]["headerFormat"] == ""
     assert opts["tooltip"]["pointFormat"] == "src → dst: <b>{point.weight}</b>"
-    # Light mode injects no dark chrome anywhere (a no-op, as elsewhere).
-    assert "backgroundColor" not in opts["tooltip"]
-    assert "borderColor" not in opts["plotOptions"]["sankey"]
 
 
 def test_sankey_dark_mode_themes_borders_and_skips_axes():
@@ -2108,7 +2068,7 @@ def test_sankey_dark_mode_themes_borders_and_skips_axes():
     # color, computed against whatever each sits on, so they stay legible in both
     # themes without a flip (the treemap reasoning, not pie's).
     df = pd.DataFrame({"src": ["A"], "dst": ["B"], "w": [1.0]})
-    opts = build_options(df, "sankey", "src", ["w"], target_col="dst", dark=True)
+    opts = build_options(df, "sankey", "src", ["w"], target_col="dst")
     assert opts["chart"]["backgroundColor"] == "#0f172a"
     assert opts["plotOptions"]["sankey"]["borderColor"] == "#0f172a"
     assert "color" not in opts["plotOptions"]["sankey"]["dataLabels"]
@@ -2317,10 +2277,8 @@ def test_dependencywheel_light_mode_shape():
     assert opts["legend"]["enabled"] is False
     assert opts["tooltip"]["headerFormat"] == ""
     assert opts["tooltip"]["pointFormat"] == "src → dst: <b>{point.weight}</b>"
-    # The border hook is dark-only, so light mode leaves no borderColor. (Key-correctness — that
-    # the block lands under 'dependencywheel', not a stale 'sankey' — is pinned explicitly by
-    # test_dependencywheel_plot_options_land_under_its_own_key, so it is not re-asserted here.)
-    assert "borderColor" not in opts["plotOptions"]["dependencywheel"]
+    # Key-correctness — that the border block lands under 'dependencywheel', not a stale
+    # 'sankey' — is pinned by test_dependencywheel_plot_options_land_under_its_own_key.
 
 
 def test_dependencywheel_dark_mode_dissolves_borders_under_its_own_key():
@@ -2329,9 +2287,7 @@ def test_dependencywheel_dark_mode_dissolves_borders_under_its_own_key():
     # its own. The node/link labels ride Highcharts' `contrast` default (no color set), and
     # the tooltip box is themed for dark mode.
     df = pd.DataFrame({"src": ["A"], "dst": ["B"], "w": [1.0]})
-    opts = build_options(
-        df, "dependencywheel", "src", ["w"], target_col="dst", dark=True
-    )
+    opts = build_options(df, "dependencywheel", "src", ["w"], target_col="dst")
     assert opts["chart"]["backgroundColor"] == "#0f172a"
     assert opts["plotOptions"]["dependencywheel"]["borderColor"] == "#0f172a"
     assert "sankey" not in opts["plotOptions"]
@@ -2467,9 +2423,11 @@ def test_networkgraph_light_mode_shape():
     df = pd.DataFrame({"src": ["A"], "dst": ["B"]})
     opts = build_options(df, "networkgraph", "src", [], target_col="dst")
     assert opts["legend"]["enabled"] is False
-    assert (
-        "tooltip" not in opts
-    )  # no custom tooltip: Highcharts' default names the nodes
+    # No CUSTOM tooltip — which was always the claim; the key exists now only because
+    # `_themed` writes chrome into it for every chart, so the absence to assert is the
+    # FORMAT, not the key.
+    assert "pointFormat" not in opts["tooltip"]
+    assert "headerFormat" not in opts["tooltip"]
     # Light mode injects no dark chrome anywhere.
     assert "borderColor" not in opts["plotOptions"]["networkgraph"]
 
@@ -2481,7 +2439,7 @@ def test_networkgraph_dark_mode_themes_only_the_shared_chrome():
     # legible on both backgrounds. So dark mode sets the shared chrome (background, tooltip)
     # and touches plotOptions.networkgraph not at all.
     df = pd.DataFrame({"src": ["A"], "dst": ["B"]})
-    opts = build_options(df, "networkgraph", "src", [], target_col="dst", dark=True)
+    opts = build_options(df, "networkgraph", "src", [], target_col="dst")
     assert opts["chart"]["backgroundColor"] == "#0f172a"
     assert opts["tooltip"]["backgroundColor"] == "#0f172a"
     # No border/color flip and no dataLabels color — the plotOptions block is untouched by dark.
@@ -2754,7 +2712,7 @@ def test_organization_dark_mode_needs_no_type_hook():
     # plotOptions.organization not at all.
     df = pd.DataFrame({"emp": ["A", "B"], "mgr": ["", "A"], "title": ["CEO", "CTO"]})
     opts = build_options(
-        df, "organization", "emp", [], target_col="mgr", title_col="title", dark=True
+        df, "organization", "emp", [], target_col="mgr", title_col="title"
     )
     assert opts["chart"]["backgroundColor"] == "#0f172a"
     assert opts["tooltip"]["backgroundColor"] == "#0f172a"
@@ -3150,9 +3108,11 @@ def test_boxplot_light_mode_shape():
     df = pd.DataFrame({"g": ["a", "a"], "v": [1.0, 2.0]})
     opts = build_options(df, "boxplot", "g", ["v"])
     assert opts["legend"]["enabled"] is False
-    assert (
-        "tooltip" not in opts
-    )  # no top-level tooltip in light mode (a no-op, as ever)
+    # No CUSTOM tooltip — which was always the claim; the key exists now only because
+    # `_themed` writes chrome into it for every chart, so the absence to assert is the
+    # FORMAT, not the key.
+    assert "pointFormat" not in opts["tooltip"]
+    assert "headerFormat" not in opts["tooltip"]
     box_opts = opts["plotOptions"]["boxplot"]
     assert set(box_opts) == {"colorByPoint", "tooltip"}
     fmt = box_opts["tooltip"]["pointFormat"]
@@ -3167,7 +3127,7 @@ def test_boxplot_dark_mode_needs_no_box_hook():
     # colorByPoint draws the border, whisker, stem and median in a palette hue legible
     # against that white — so there is nothing left to flip. Only the generic chrome moves.
     df = pd.DataFrame({"g": ["a", "a"], "v": [1.0, 2.0]})
-    opts = build_options(df, "boxplot", "g", ["v"], dark=True)
+    opts = build_options(df, "boxplot", "g", ["v"])
     assert opts["chart"]["backgroundColor"] == "#0f172a"
     assert opts["xAxis"]["labels"]["style"]["color"] == "#94a3b8"
     assert opts["yAxis"]["gridLineColor"] == "#334155"
@@ -3399,8 +3359,10 @@ def test_waterfall_light_mode_shape():
     opts = build_options(_bridge(), "waterfall", "step", ["delta"])
     assert opts["legend"]["enabled"] is False
     wf = opts["plotOptions"]["waterfall"]
-    assert set(wf) == {"upColor", "color", "dataLabels"}
-    assert "borderColor" not in wf and "lineColor" not in wf
+    # Both of the theme's waterfall writes are here: the dissolved bar border AND the
+    # connector lineColor, which is the pair test_waterfall_dark_mode_themes_the_bars_and_
+    # the_connectors reads by value.
+    assert set(wf) == {"upColor", "color", "dataLabels", "borderColor", "lineColor"}
 
 
 def test_waterfall_dark_mode_themes_the_bars_and_the_connectors():
@@ -3414,7 +3376,7 @@ def test_waterfall_dark_mode_themes_the_bars_and_the_connectors():
     # read as a running total rather than a row of floating bars — survive on the dark
     # background only barely, so they are lifted to the axis color. That half is waterfall's
     # alone: it is the only line Highcharts draws BETWEEN marks.
-    opts = build_options(_bridge(), "waterfall", "step", ["delta"], dark=True)
+    opts = build_options(_bridge(), "waterfall", "step", ["delta"])
     wf = opts["plotOptions"]["waterfall"]
     assert wf["borderColor"] == "#0f172a"  # == _DARK_CHROME["bg"]
     assert wf["lineColor"] == "#475569"  # == _DARK_CHROME["axis"]
@@ -3942,8 +3904,13 @@ def test_sunburst_light_mode_shape():
     opts = _sun()
     assert opts["legend"]["enabled"] is False
     sb = opts["plotOptions"]["sunburst"]
-    assert set(sb) == {"allowTraversingTree", "cursor", "levels", "dataLabels"}
-    assert "borderColor" not in sb
+    assert set(sb) == {
+        "allowTraversingTree",
+        "cursor",
+        "levels",
+        "dataLabels",
+        "borderColor",
+    }
 
 
 def test_sunburst_dark_mode_dissolves_the_sector_borders():
@@ -3951,7 +3918,7 @@ def test_sunburst_dark_mode_dissolves_the_sector_borders():
     # WHITE in both themes — so in dark mode every sector is ringed white (verified by
     # rendering). Dissolve them into the dark background, as pie, treemap and sankey dissolve
     # their gaps. Nothing else flips: the labels ride `contrast` and the hues read on both.
-    opts = _sun(dark=True)
+    opts = _sun()
     sb = opts["plotOptions"]["sunburst"]
     assert sb["borderColor"] == "#0f172a"  # == _DARK_CHROME["bg"]
     assert opts["chart"]["backgroundColor"] == "#0f172a"
@@ -4001,7 +3968,7 @@ def test_xrange_builds_one_bar_per_row_on_lanes_down_the_y_axis():
     assert opts["yAxis"]["reversed"] is True
     # Highcharts titles a category y-axis "Values" unless explicitly CLEARED (None does not
     # do it — verified by rendering); a lane is a name, not a value.
-    assert opts["yAxis"]["title"] == {"text": ""}
+    assert opts["yAxis"]["title"]["text"] == ""
     bars = _bars(opts)
     assert len(bars) == 4
     # `y` is a POSITION into `categories`, not a value — boxplot's positional trick.
@@ -4539,8 +4506,7 @@ def test_xrange_light_mode_shape():
     opts = _xr()
     assert opts["legend"]["enabled"] is False
     xr = opts["plotOptions"]["xrange"]
-    assert set(xr) == {"pointWidth", "minPointLength"}
-    assert "borderColor" not in xr
+    assert set(xr) == {"pointWidth", "minPointLength", "borderColor"}
 
 
 def test_xrange_dark_mode_dissolves_the_bar_borders():
@@ -4550,7 +4516,7 @@ def test_xrange_dark_mode_dissolves_the_bar_borders():
     # #333333. Pixel-scanning a dark-mode xrange PNG off the export server puts its default
     # border at pure #ffffff — the background variable, exactly column/bar's case — so every
     # bar is ringed white until it is dissolved into the dark background.
-    opts = _xr(dark=True)
+    opts = _xr()
     assert (
         opts["plotOptions"]["xrange"]["borderColor"] == "#0f172a"
     )  # _DARK_CHROME["bg"]
@@ -4775,7 +4741,9 @@ def test_columnrange_light_mode_shape():
     # also how it "carries no data labels": there is no plotOptions.columnrange to hold any.
     opts = _cr()
     assert opts["legend"]["enabled"] is False
-    assert "plotOptions" not in opts  # no dataLabels, no light-mode border
+    # The ONLY plotOptions entry is the dissolved border the theme writes — in particular
+    # there are still no dataLabels, which is what this line has always been about.
+    assert set(opts["plotOptions"]["columnrange"]) == {"borderColor"}
 
 
 def test_columnrange_dark_mode_dissolves_the_bar_borders():
@@ -4784,7 +4752,7 @@ def test_columnrange_dark_mode_dissolves_the_bar_borders():
     # border being a fixed #333333). A columnrange bar's default border is the background
     # variable, pure white, which the color-scheme pin keeps white in dark mode, ringing every
     # bar until it is dissolved into the dark background.
-    opts = _cr(dark=True)
+    opts = _cr()
     assert (
         opts["plotOptions"]["columnrange"]["borderColor"] == "#0f172a"
     )  # _DARK_CHROME bg
@@ -4850,6 +4818,14 @@ def test_arearange_and_columnrange_differ_only_in_chart_type():
     ar, cr = _ar(title="t"), _cr(title="t")
     assert ar["chart"]["type"] == "arearange" and cr["chart"]["type"] == "columnrange"
     ar["chart"]["type"] = cr["chart"]["type"] = "_"
+    # ONE divergence, and it is not the shared BUILD branch — it is `_themed`, which is keyed
+    # on chart type by design: columnrange has a white bar border to dissolve and an area FILL
+    # has no stroke to dissolve (test_arearange_has_no_dark_mode_theme_hook states the argument).
+    # Lift that off and the branch output is byte-identical, which is the invariant here.
+    from highcharts_builder import _DARK_CHROME
+
+    assert cr.pop("plotOptions") == {"columnrange": {"borderColor": _DARK_CHROME["bg"]}}
+    assert "plotOptions" not in ar
     assert ar == cr
 
 
@@ -4990,7 +4966,7 @@ def test_arearange_has_no_dark_mode_theme_hook():
     # OUT of the border-dissolve group and adds NO plotOptions even in dark mode. Pins the decision
     # against a future edit that "helpfully" adds arearange to the dissolve set on the false analogy
     # to columnrange — the waterfall lesson (inference from a shared base class is unsound).
-    opts = _ar(dark=True)
+    opts = _ar()
     assert "plotOptions" not in opts  # no border hook, unlike columnrange
     assert (
         opts["chart"]["backgroundColor"] == "#0f172a"
@@ -5118,7 +5094,7 @@ def test_bullet_builds_one_positional_measure_goal_pair_per_category():
     assert opts["series"][0]["name"] == "actual"
     assert "quota" not in opts["series"][0]["name"]
     assert opts["legend"]["enabled"] is False
-    assert _bullet_opts(dark=True)["legend"]["enabled"] is False
+    assert _bullet_opts()["legend"]["enabled"] is False
 
 
 def test_bullet_never_emits_the_literal_target_key_for_a_point():
@@ -5645,12 +5621,12 @@ def test_bullet_draws_no_qualitative_plot_bands():
     assert "plotBands" not in js
     # Nor invented for dark mode, where a band would be the easiest thing to slip in as "chrome"
     # — every band on a bullet is data, whatever colour it is drawn in.
-    dark = _bullet_opts(dark=True)
+    dark = _bullet_opts()
     assert dark["yAxis"]["title"]["text"]
     assert "plotBands" not in str(dark)
 
 
-def test_bullet_sets_a_light_mode_crossbar_colour_off_the_categorical_palette():
+def test_bullet_sets_a_crossbar_colour_off_the_categorical_palette():
     # THE CROSSBAR TRAP, stated once, here — the other tests that touch this hook refer back
     # rather than restating it. Left unset, the goal marker takes the SERIES hue (the same blue as
     # the bar it crosses) and Highcharts draws it at 140% of the bar width. So it does not vanish,
@@ -5664,87 +5640,78 @@ def test_bullet_sets_a_light_mode_crossbar_colour_off_the_categorical_palette():
     # `_BULLET_TARGET_COLOR` and asserting the branch equals it would stay green if its value were
     # renamed to `#ff00ff`. The independent facts are the three below it — off the categorical
     # palette (`_WATERFALL_SUM_COLOR`/`_SUNBURST_ROOT_COLOR`'s argument: a goal is not one of the
-    # categories, it is the line they are read AGAINST), unrepaintable by a custom palette, and
-    # different in dark mode (pinned next door).
+    # categories, it is the line they are read AGAINST) and unrepaintable by a custom palette.
+    # That it also READS against both surfaces it crosses is the separate claim next door.
     opts = _bullet_opts()
     target = opts["plotOptions"]["bullet"]["targetOptions"]
-    assert target["color"] == "#0f172a"
+    assert target["color"] == "#f1f5f9"
     assert target["color"] not in list(DEFAULT_COLORS)
     custom = ["#111111", "#222222"]
     assert (
         _bullet_opts(colors=custom)["plotOptions"]["bullet"]["targetOptions"]["color"]
-        == "#0f172a"
+        == "#f1f5f9"
     )
-    assert "#0f172a" not in custom
-    # No geometry beside it. `targetOptions.width = 0` raises EmptyValueError out of a validator
-    # naming neither the key nor the series, and every numeric key under `targetOptions` rejects a
-    # numpy.int64 outright — so Highcharts' 140% x 3px default is left entirely alone (the
-    # pane-`size` "stop steering" rule). The problem was contrast; the fix is the colour. Setting
-    # no numeric key here makes both traps unreachable rather than remembered.
-    assert set(target) == {"color"}
+    assert "#f1f5f9" not in custom
+    # No geometry DERIVED FROM DATA beside it, which is the trap that matters. `targetOptions
+    # .width = 0` raises EmptyValueError out of a validator naming neither the key nor the series,
+    # and every numeric key under `targetOptions` rejects a numpy.int64 outright — so Highcharts'
+    # 140% x 3px default is left entirely alone (the pane-`size` "stop steering" rule) and the one
+    # numeric key set, `borderWidth`, is a module constant that no frame can reach. Width and
+    # height stay absent, so neither trap is reachable rather than merely remembered.
+    # The keys that ARE set, exhaustively — so `width`/`height` cannot creep in later. Stated as
+    # the full set rather than as two `not in`s: that is what makes it a pin on the geometry trap
+    # rather than a pin on two names someone thought of today.
+    assert set(target) == {"color", "borderColor", "borderWidth"}
 
 
-def test_bullet_dark_mode_flips_both_hooks_and_leaks_into_no_later_light_chart():
+def test_bullet_themes_both_hooks_and_the_crossbar_reads_on_both_its_surfaces():
     """Bullet's two `_themed` hooks, of DIFFERENT KINDS, pinned together because a fix to either
     that broke the other would otherwise pass half the suite.
 
     `borderColor` is the ordinary dissolve, shared with column/bar/xrange/columnrange and NOT
     waterfall — joined on a MEASUREMENT rather than an inference, since waterfall is the standing
     proof the shared bar base class settles nothing (its border is a fixed #333333, while bullet's
-    bars come back crisply ringed white). `targetOptions.color` is the only hook in this module
-    that flips a MARK rather than chrome: the crossbar is drawn at 140% of the bar width, so it
-    necessarily spans TWO backgrounds at once — the bar (a constant palette blue in both themes)
-    and the chart background (white -> slate) — and a fixed colour therefore cannot work in
-    PRINCIPLE, not merely in practice.
+    bars come back crisply ringed white). `targetOptions` is the only hook in this module that
+    styles a MARK rather than chrome: the crossbar is drawn at 140% of the bar width, so it
+    necessarily spans TWO surfaces at once — the bar and the chart background — and a single
+    colour therefore cannot work in PRINCIPLE, not merely in practice. Which is why it is the one
+    mark carrying a fill AND a border: one value per surface.
 
-    The dark hue is asserted at its PATH in the option tree and in the serialized JS at the level
-    it was written to, never as a bare `"#f1f5f9" in js`: that string is `_DARK_CHROME["text"]`,
-    which `_themed` writes to the title, both axis label styles and the tooltip on EVERY dark
+    The hue is asserted at its PATH in the option tree and in the serialized JS at the level it
+    was written to, never as a bare `"#f1f5f9" in js`: that string is `_DARK_CHROME["text"]`,
+    which `_themed` also writes to the title, both axis label styles and the tooltip on EVERY
     chart, so the substring test would pass with this hook deleted outright — the one thing it
     exists to catch.
-
-    The crossbar-vs-border inequality is the assertion a "somewhere in the JS" test can never
-    make, and it is not decoration: `_BULLET_TARGET_COLOR` IS the dark background read the other
-    way round, so shipping it unflipped would paint the crossbar in the background colour — the
-    exact invisibility the hook exists to prevent (see
-    `test_bullet_sets_a_light_mode_crossbar_colour_off_the_categorical_palette` for the trap).
-
-    The light -> dark -> light ORDER is the third thing here, and the third build is the one that
-    earns it: `_themed` INDEXES this key rather than `setdefault`ing it, so were the branch to emit
-    `targetOptions` as a shared module constant instead of a fresh literal, the first dark chart in
-    a process would mutate that constant and every later LIGHT chart would ship a dark crossbar.
     """
-    light = _bullet_opts()
-    dark = _bullet_opts(dark=True)
-    light_again = _bullet_opts()
+    opts = _bullet_opts()
 
-    target = dark["plotOptions"]["bullet"]["targetOptions"]
+    target = opts["plotOptions"]["bullet"]["targetOptions"]
     crossbar = target["color"]
-    # Read with a FALLBACK rather than by subscript, and deliberately: with no border, the
-    # fill is all the mark has, which is the state to be judged — not a KeyError. Delete the
-    # border half of the hook and this test must fail on the CONTRAST assertion below, the
-    # one it exists for; subscripting here would kill it two lines earlier and leave that
-    # assertion permanently unverified (the mutation rule: read the failure, not the exit
-    # code — a mutant caught by KeyError is still a hole).
+    # Read with a FALLBACK rather than by subscript, and deliberately: with no border, the fill
+    # is all the mark has, which is the state to be judged — not a KeyError. Delete the border
+    # half of the hook and this test must fail on the CONTRAST assertion below, the one it
+    # exists for; subscripting here would kill it two lines earlier and leave that assertion
+    # permanently unverified (the mutation rule: read the failure, not the exit code — a mutant
+    # caught by KeyError is still a hole).
     edge = target.get("borderColor", crossbar)
     width = target.get("borderWidth", 0)
-    border = dark["plotOptions"]["bullet"]["borderColor"]
-    background = dark["chart"]["backgroundColor"]
+    border = opts["plotOptions"]["bullet"]["borderColor"]
+    background = opts["chart"]["backgroundColor"]
     bar = DEFAULT_COLORS[0]
 
-    # THE PAIRING, and the assertion whose absence let a real regression ship green. Every
-    # other check here reads ONE value at ONE path; the crossbar's whole problem is that it
-    # spans two surfaces at once, so its legibility is a property of a PAIR and no
-    # single-value assertion can see it. Repointing DEFAULT_COLORS at the theme lightened the
-    # bar from #2563eb to #60a5fa and dropped the fill's contrast against it from 4.19:1 to
-    # 2.32:1 — every assertion in this test still passed, and the crossbar visibly washed out
-    # on exactly the rows where the measure beats the goal.
+    # THE PAIRING, and the assertion whose absence let a real regression ship green. Every other
+    # check here reads ONE value at ONE path; the crossbar's whole problem is that it spans two
+    # surfaces at once, so its legibility is a property of a PAIR and no single-value assertion
+    # can see it. Repointing DEFAULT_COLORS at the config theme lightened the bar from #2563eb to
+    # #60a5fa and dropped the fill's contrast against it from 4.19:1 to 2.32:1 — every assertion
+    # in this test still passed, and the crossbar visibly washed out on exactly the rows where
+    # the measure beats the goal.
     #
-    # Run the numbers and no single value CAN work: clearing 3:1 on the slate background
-    # needs a luminance >= 0.25, on the palette blue <= 0.087. So the requirement is stated
-    # over the pair — each surface must have a >= 3:1 partner among {fill, border} — which is
-    # a rule about the mark rather than a literal about today's theme, and survives the next
-    # palette the way a hardcoded hex would not.
+    # Run the numbers and no single value CAN work: clearing 3:1 on the slate background needs a
+    # luminance >= 0.25, on the palette blue <= 0.087. So the requirement is stated over the pair
+    # — each surface must have a >= 3:1 partner among {fill, border} — which is a rule about the
+    # mark rather than a literal about today's theme, and survives the next palette the way a
+    # hardcoded hex would not.
     assert (
         max(_contrast_ratio(crossbar, background), _contrast_ratio(edge, background))
         >= 3.0
@@ -5752,37 +5719,23 @@ def test_bullet_dark_mode_flips_both_hooks_and_leaks_into_no_later_light_chart()
     assert max(_contrast_ratio(crossbar, bar), _contrast_ratio(edge, bar)) >= 3.0
     assert width >= 1
 
-    # Hook one: the border dissolves INTO the background; light mode is untouched.
+    # Hook one: the bar border dissolves INTO the background.
     assert border == background
-    assert "borderColor" not in light["plotOptions"]["bullet"]
-    # Hook two: the crossbar CHANGED, and it changed to something readable against both of the
-    # surfaces it crosses rather than into either of them.
-    assert crossbar != light["plotOptions"]["bullet"]["targetOptions"]["color"]
+    # Hook two: the crossbar is readable against both surfaces rather than dissolving into
+    # either. `_DARK_CHROME["bg"]` serves as the crossbar's BORDER and as the bar's dissolved
+    # border, so the fill must differ from it or the mark disappears where it matters most.
     assert crossbar != border
     assert crossbar != background
-    # The aliasing that makes the flip mandatory rather than cosmetic: the light value IS the dark
-    # background, so an unflipped crossbar is an invisible one.
-    assert light["plotOptions"]["bullet"]["targetOptions"]["color"] == background
+    assert edge == background  # the border half IS the background colour, on purpose
     # And the hue reaches the JS at the level it was written to — not merely somewhere in the
-    # chrome, which is what `"#f1f5f9" in js` would have settled for. (highcharts-core emits
-    # the keys alphabetically, so borderColor/borderWidth lead.)
-    flat = "".join(_bullet_js(dark=True).split())
+    # chrome, which is what `"#f1f5f9" in js` would have settled for. (highcharts-core emits the
+    # keys alphabetically, so borderColor/borderWidth lead.)
+    flat = "".join(_bullet_js().split())
     assert (
         f"targetOptions:{{borderColor:'{edge}',borderWidth:{width},color:'{crossbar}'}}"
         in flat
     )
-
-    # The leak check proper: a light chart built AFTER a dark one is still light.
-    assert light_again["plotOptions"]["bullet"]["targetOptions"]["color"] == "#0f172a"
-    assert "borderColor" not in light_again["plotOptions"]["bullet"]
-    # The border is a DARK-mode repair, not a permanent part of the mark: in light mode the
-    # near-black fill already clears both surfaces (17.9:1 on white, 7.0:1 on the bar), so
-    # adding one there would be decoration. Its absence is what says the hook is targeted.
-    assert "borderColor" not in light_again["plotOptions"]["bullet"]["targetOptions"]
-    assert "borderWidth" not in light["plotOptions"]["bullet"]["targetOptions"]
-    # The bar hue itself is unchanged across the flip: like the shared palette, it reads on both
-    # backgrounds, so only the border and the crossbar move.
-    assert dark["colors"] == light["colors"] == list(DEFAULT_COLORS)
+    assert opts["colors"] == list(DEFAULT_COLORS)
 
 
 # --- modules, tooltip, axis, and the mark that prints nothing -------------- #
@@ -5867,7 +5820,7 @@ def test_bullet_prints_nothing_in_the_mark_and_the_omitted_key_is_the_gate():
     # GAUGE's default ON, which is why that family disables them EXPLICITLY and why merely
     # omitting the key there would be a gate that did nothing. Same silence, opposite meaning.
     assert "dataLabels" not in str(_bullet_opts())
-    assert "dataLabels" not in str(_bullet_opts(dark=True))
+    assert "dataLabels" not in str(_bullet_opts())
 
 
 def test_bullet_y_axis_title_names_both_columns_and_is_never_none():
@@ -5895,7 +5848,7 @@ def test_sales_vs_quota_sample_builds_a_bullet_chart():
     # The three-way beat/miss/match assertion is the argumentative half. A quota sample where every
     # region MISSED would look tidier and would hide the one failure a reader could not diagnose —
     # the crossbar trap, which is only reachable from the page on a BEATING row (see
-    # `test_bullet_sets_a_light_mode_crossbar_colour_off_the_categorical_palette`). So the beats
+    # `test_bullet_sets_a_crossbar_colour_off_the_categorical_palette`). So the beats
     # are load-bearing, not flattering. The exact MATCH (North) is the honest-looking edge that a
     # per-ROW equality is fine, unlike the per-COLUMN one the app guards against.
     from sample_data import _sales_vs_quota
@@ -6339,11 +6292,7 @@ def test_variwide_dark_mode_dissolves_its_bar_borders():
     the light shell; it is the ABSENCE of the hook that would break the symmetry, leaving a white
     seam on a navy page. Same fix as column/bar, opposite reason.
     """
-    assert (
-        _variwide_opts(dark=True)["plotOptions"]["variwide"]["borderColor"] == "#0f172a"
-    )
-    # Light mode is untouched — the branch emits no plotOptions at all.
-    assert "plotOptions" not in _variwide_opts()
+    assert _variwide_opts()["plotOptions"]["variwide"]["borderColor"] == "#0f172a"
 
 
 def test_variwide_sample_builds():
@@ -6730,16 +6679,16 @@ def test_dumbbell_has_no_dark_mode_theme_hook():
         "plotOptions" in _dumbbell_opts()
     )  # it HAS plotOptions, for lowColor/connector
     light = _dumbbell_opts()["plotOptions"]["dumbbell"]
-    dark = _dumbbell_opts(dark=True)["plotOptions"]["dumbbell"]
+    dark = _dumbbell_opts()["plotOptions"]["dumbbell"]
     assert light == dark, "dumbbell's plotOptions must not differ between themes"
     # Asserted at the PATH, never as a bare substring: `borderColor` appears in EVERY dark chart's
     # emitted JS as part of the tooltip chrome `_themed` writes, so `"borderColor" not in js`
     # fails on a correct chart — and, written the other way round, a `"borderColor" in js` pin
     # would pass with the hook it existed for deleted outright. That is this file's standing
     # dark-mode trap, and it caught this very test while it was being written.
-    assert "borderColor" not in _dumbbell_opts(dark=True)["plotOptions"]["dumbbell"]
+    assert "borderColor" not in _dumbbell_opts()["plotOptions"]["dumbbell"]
     # The theme still reaches the CHROME, so the absence above is specific rather than a dead flag.
-    assert _dumbbell_opts(dark=True)["chart"]["backgroundColor"] == "#0f172a"
+    assert _dumbbell_opts()["chart"]["backgroundColor"] == "#0f172a"
 
 
 def test_dumbbell_sample_builds():
@@ -7101,7 +7050,7 @@ def test_gauge_ticks_are_silenced_by_width_not_by_tick_positions(bookings_frame)
     axis = _gauge(bookings_frame, ["north"])["yAxis"]
     assert axis["tickWidth"] == 0 and axis["minorTickWidth"] == 0
     assert "tickPositions" not in axis
-    assert axis["labels"] == {"enabled": False}
+    assert axis["labels"]["enabled"] is False
 
 
 def test_gauge_labels_stack_in_the_hub_in_each_rings_own_hue(bookings_frame):
@@ -7186,7 +7135,7 @@ def test_count_marks_has_no_rule_for_gauge(bookings_frame):
 
 def test_gauge_light_mode_shape_and_dark_mode_themes_the_tracks(bookings_frame):
     cols = ["north", "south"]
-    light = _gauge(bookings_frame, cols, dark=False)
+    light = _gauge(bookings_frame, cols)
     # There is no `borderColor` anywhere, and there CANNOT be: SolidGaugeSeries models no border
     # at any level, so one would be silently dropped (boxplot's fillColor, exactly).
     assert "borderColor" not in light["plotOptions"]["solidgauge"]
@@ -7196,9 +7145,9 @@ def test_gauge_light_mode_shape_and_dark_mode_themes_the_tracks(bookings_frame):
         "stickyTracking",
         "dataLabels",
     }
-    assert all(t["backgroundColor"] == "#f1f5f9" for t in light["pane"]["background"])
+    assert all(t["backgroundColor"] == "#334155" for t in light["pane"]["background"])
 
-    dark = _gauge(bookings_frame, cols, dark=True)
+    dark = _gauge(bookings_frame, cols)
     # The ONE hook this type can have, and the first to reach a TOP-LEVEL key rather than
     # plotOptions: the tracks. Left unset they take a Highcharts default that
     # _LIGHT_COLOR_SCHEME_CSS pins to its LIGHT resolution in BOTH themes, so every dial would
@@ -7482,7 +7431,7 @@ def test_needle_draws_the_axis_it_points_at(bookings_frame):
     # gridLineColor onto every axis it finds — so a nonzero default would draw concentric
     # gridlines across the face that ONLY dark-mode readers would ever see.
     assert opts["yAxis"]["gridLineWidth"] == 0
-    assert opts["yAxis"]["title"] == {"text": ""}  # or Highcharts titles it "Values"
+    assert opts["yAxis"]["title"]["text"] == ""  # or Highcharts titles it "Values"
 
 
 def test_needle_subtitle_states_only_the_aggregation(bookings_frame):
@@ -7550,7 +7499,7 @@ def test_needle_face_carries_no_grid_not_even_the_minor_one(bookings_frame):
     # the minor one, and Highcharts defaults it to 1px of `#f2f2f2` — invisible on the light dial
     # face, and a BLAZING WHITE STARBURST across the dark one. Verified by rendering, on a chart
     # whose every unit test passed: the options were right and the picture was not.
-    opts = _needle(bookings_frame, ["north"], dark=True)
+    opts = _needle(bookings_frame, ["north"])
     assert opts["yAxis"]["gridLineWidth"] == 0
     assert opts["yAxis"]["minorGridLineWidth"] == 0
     assert opts["yAxis"]["minorTickWidth"] == 0
@@ -7665,10 +7614,10 @@ def test_needle_ignores_x_col_entirely(bookings_frame):
 
 
 def test_needle_light_mode_shape_and_dark_mode_themes_the_dial_face(bookings_frame):
-    light = _needle(bookings_frame, ["north", "south"], dark=False)
-    assert all(f["backgroundColor"] == "#f1f5f9" for f in light["pane"]["background"])
+    light = _needle(bookings_frame, ["north", "south"])
+    assert all(f["backgroundColor"] == "#334155" for f in light["pane"]["background"])
 
-    dark = _needle(bookings_frame, ["north", "south"], dark=True)
+    dark = _needle(bookings_frame, ["north", "south"])
     # The family's ONE hook, widened from solidgauge's: the dial FACE. Left unset it takes a
     # Highcharts default that _LIGHT_COLOR_SCHEME_CSS pins to its LIGHT resolution in BOTH themes,
     # so the dial would sit on a glaring white rail against the dark shell (verified by rendering:

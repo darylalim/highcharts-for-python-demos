@@ -38,10 +38,11 @@ png = build_chart_png(df, chart_type, x_col, y_cols, title=title)
 message = explain_export_failure(exc)  # plain markdown; the module stays Streamlit-free
 ```
 
-All three helpers take an optional `dark=` flag (default `False`) that themes the
-chart chrome (background/text/axes/gridlines/tooltip) for dark mode; the app
-derives it from `st.context.theme.type` and threads it through the cached
-renderers. Bubble charts also take a `size_col=` naming the numeric column that
+None of the three helpers takes a mode flag: `_themed` applies the chart chrome
+(background/text/axes/gridlines/tooltip) unconditionally, because `.streamlit/config.toml`
+is a single `[theme]` and every viewer gets the dark shell. The `dark=` flag that used to
+thread from `st.context.theme.type` is gone, along with the light values it selected.
+Bubble charts also take a `size_col=` naming the numeric column that
 drives each marker's area (required for `bubble`, raising `ValueError` if
 omitted; ignored by the other types), threaded through the same renderers,
 sankey charts a `target_col=` naming the destination-node column (required for
@@ -2020,18 +2021,15 @@ that it is **re-derived** when the aggregation changes.
   containing its hue breaks it — which is exactly what happened when this theme landed
   (slate-400 was index 6 of the new scale) and what
   `test_sunburst_root_color_is_off_the_categorical_scale` caught.
-  The palette is shared across light/dark; only the
-  chart chrome (background/text/axes/gridlines/tooltip) flips, via
-  `build_options(..., dark=...)` / `_DARK_CHROME`. `streamlit_app.py` reads `dark` from
-  `st.context.theme.type` and threads it through the cached renderers (so it's
-  part of their cache key) — and since the config is a single `[theme]` with no
-  `[theme.light]`/`[theme.dark]`, that resolves to dark for every viewer; `dark=False`
-  remains a supported builder input, exercised by the AppTests and the light-mode
-  per-type tests. The one exception is `heatmap`, which colors its cells
-  by a sequential `colorAxis` (`_HEATMAP_GRADIENT`, anchored on
-  `DEFAULT_COLORS[0]`; a dark ramp `_HEATMAP_GRADIENT_DARK`, its two endpoints drawn off the
-  theme's own `chartSequentialColors`, flipped in by
-  `_themed`) rather than the categorical palette — it still carries `colors` for
+  There is ONE mode. `_themed` applies `_DARK_CHROME` to every chart and selects between
+  nothing; `streamlit_app.py` reads no theme at all, because the config is a single `[theme]`
+  with no `[theme.light]`/`[theme.dark]` and a light chart could only ever be a mismatch. The
+  useful smell left behind: a colour written at build time and then *overwritten* by `_themed`
+  is a second mode still hiding — `_HEATMAP_GRADIENT`, `_HEATMAP_NULL` and
+  `_BULLET_TARGET_COLOR` were each exactly that, and each now holds its final value at its
+  single write. The one exception to the categorical palette is `heatmap`, which colors its
+  cells by a sequential `colorAxis` (`_HEATMAP_GRADIENT`, its two endpoints drawn off the
+  theme's own `chartSequentialColors`) rather than the categorical palette — it still carries `colors` for
   cross-type consistency (the palette tests). The second, and the only place a **mark** flips
   rather than chrome, is `bullet`'s goal crossbar: Highcharts draws it at 140% of the bar width,
   so it necessarily crosses **both** the bar (a constant palette blue in both themes) *and* the

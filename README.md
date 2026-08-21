@@ -42,9 +42,9 @@ the charts are built to match it.
 - **Two render modes** — *Interactive* runs Highcharts JS from the CDN, embedded
   via `st.iframe`; *Static (PNG)* renders server-side through the Highcharts
   export server and shows the image with a download button.
-- **Theme-aware** — charts flip their background, text, axes, and tooltip to match
-  the active theme in both render modes, while each series keeps its palette color.
-  The shipped theme is dark-only, but the builder supports both modes.
+- **One dark theme, end to end** — the app ships a single dark theme, and the charts
+  are built to match it in both render modes: background, text, axes and tooltip all
+  come from the same palette the Streamlit shell uses.
 - **KPI row** — rows, numeric columns, and a chart-type-adaptive third metric
   (series plotted, or the mark count: cells, tiles, stages, flows, links, boxes,
   steps, sectors, bars, or ranges).
