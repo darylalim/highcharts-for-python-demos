@@ -1190,9 +1190,15 @@ with left.container(border=True, height="stretch"):
     # mid-session switch used to cause — applied frontend-side with no Python rerun —
     # from being reachable at all.
     #
-    # The defensive getattr keeps this working under AppTest, where st.context has no
-    # theme; those tests therefore exercise the light path, which the builder still
-    # supports even though the shell no longer selects it.
+    # On the getattr pair, because the obvious reading of it is wrong: st.context.theme is
+    # NOT absent under AppTest. streamlit/runtime/context.py returns StreamlitTheme({"type":
+    # None}) whenever there is no script-run context, and that mapping resolves .type to
+    # None — so neither default here is reachable, and `dark` lands False only because
+    # None != "dark". The getattr stays as cheap insurance across Streamlit versions, but it
+    # is insurance, not the mechanism: if `type` ever became an enum or took a non-None
+    # default, the fallback would NOT catch it and every render would silently pin to light
+    # chrome on a dark-only shell. Anything depending on that path should assert the value,
+    # not trust these defaults.
     _theme = getattr(st.context, "theme", None)
     dark = getattr(_theme, "type", "light") == "dark"
 

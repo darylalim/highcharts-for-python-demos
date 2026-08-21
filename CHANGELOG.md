@@ -75,6 +75,45 @@ Dates are the last commit at that version — the point it stopped being current
   `test_sunburst_root_color_is_off_the_categorical_scale` on the first full run, not by reading —
   and because `DEFAULT_COLORS` is now itself pinned to `config.toml`, that test has become a guard
   on the **theme**: a future palette containing the root hue fails there rather than on screen.
+- **The bullet goal crossbar lost half its contrast against its own bar, and no test could see
+  it.** `_themed` paints the crossbar `_DARK_CHROME["text"]` while the bar stays
+  `DEFAULT_COLORS[0]`; lightening that from `#2563eb` to `#60a5fa` took the pair from 4.19:1 to
+  **2.32:1**, and the crossbar visibly washed out on exactly the rows where the measure beats the
+  goal — the rows a reader most wants to find. Every bullet test stayed green because each asserts
+  one hue at one path, and this mark's legibility is a property of a **pair**. The module's
+  long-standing claim that "a fixed colour cannot work in principle" turns out to be provable
+  rather than rhetorical: clearing 3:1 on the slate background needs a relative luminance ≥ 0.25
+  and on the palette blue ≤ 0.087, ranges that do not overlap. So the dark-mode mark now carries
+  **two** values — the light fill plus a `_DARK_CHROME["bg"]` border — one per surface it crosses.
+  The test is written over the pair (each surface must have a ≥ 3:1 partner among {fill, border}),
+  which is a rule about the mark rather than a hex about today's theme; verified by deleting the
+  border half and confirming *that* assertion is what fails.
+- **Series 7 was drawn in the axis-label colour.** The upstream financial-dashboard template sets
+  `grayColor` and `chartCategoricalColors[6]` to the same `#94a3b8`, and `_DARK_CHROME["muted"]`
+  copies `grayColor` for axis labels, legend hover and axis titles — so a 7-series dark chart drew
+  one series at **1.00:1** against the chart's own furniture. Index 6 is now pink (`#f472b6`), the
+  single deliberate deviation from the template, and the hue this palette's predecessor carried in
+  that slot. The gray left the *categorical* scale rather than the chrome, because chrome is what
+  the shell and the chart have to agree on. New
+  `test_no_series_colour_collides_with_the_chart_chrome` states the rule as **identity**, not as a
+  contrast floor: a series and a gridline may legitimately sit close, but being the same string is
+  never a design call.
+- **`.streamlit/config.toml` fetched the same font twice.** The template's `headingFont` requests
+  Inter at `wght@600;700` — a strict subset of the weights `font` already requests — so every app
+  load made a second render-blocking round trip to fonts.googleapis.com for no visual difference.
+  Dropped; headings inherit `font`.
+- **`streamlit_app.py`'s theme comment described a defence the code does not have.**
+  `st.context.theme` is never absent: `streamlit/runtime/context.py` returns
+  `StreamlitTheme({"type": None})` when there is no script-run context, so neither `getattr`
+  default is reachable and `dark` lands False only because `None != "dark"`. The getattr stays as
+  version insurance; the comment now says what actually happens, since the difference matters on a
+  dark-only shell where a silent pin to light chrome would be invisible.
+- **Two test-hygiene fixes in the new sync test.** Its sequential-scale check read
+  `set(_HEATMAP_GRADIENT_DARK.values())`, which would fail on any non-colour key — precisely what
+  the builder's own note says that dict is designed to accept — so it pins the two named endpoints
+  instead. And `_config_theme()` now reports missing keys with the reason (moving colours back into
+  `[theme.light]`/`[theme.dark]` is the likeliest future edit here) rather than dying on a bare
+  `KeyError`, and its case-normalization recurses into nested tables as its docstring promised.
 - **Two prose anecdotes quoted a palette hex that has since moved.** Both recorded a rendering
   session — the dumbbell connector's default colour read off the DOM, in `highcharts_builder.py`
   and again in `docs/chart-types.md` — and both made their point by naming the old brand blue. The

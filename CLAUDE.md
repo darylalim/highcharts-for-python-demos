@@ -472,7 +472,11 @@ conventions in their original, fully-enumerated form).
   `backgroundColor`/`textColor`/`grayColor`/`borderColor`, and `_HEATMAP_GRADIENT_DARK`'s two
   endpoints come off its `chartSequentialColors`. All of it is guarded by
   `test_theme_colors_stay_in_sync_with_config`, so the copy fails the suite rather than
-  drifting. The palette's **order** is load-bearing beyond its hues — `_WATERFALL_*` and
+  drifting. Exactly **one** entry deviates from the upstream template — index 6 is pink, not the
+  template's gray, because that gray is also its `grayColor` and therefore `_DARK_CHROME["muted"]`,
+  so series 7 was being drawn in the axis-label colour at 1.00:1;
+  `test_no_series_colour_collides_with_the_chart_chrome` is the guard that keeps any future theme
+  from walking a chrome value back into the categorical scale. The palette's **order** is load-bearing beyond its hues — `_WATERFALL_*` and
   `_BOXPLOT_OUTLIER_COLOR` index into it, so a reshuffle repaints "a rise" and "a loss".
   The palette is shared across light/dark; only the chart chrome flips, via
   `build_options(..., dark=...)` / `_DARK_CHROME`. The app itself now resolves to dark for
@@ -480,5 +484,8 @@ conventions in their original, fully-enumerated form).
   Two exceptions: `heatmap` colors its cells by a sequential `colorAxis` rather than the
   categorical palette, and `bullet`'s goal crossbar is the only place a **mark** flips rather
   than chrome — it necessarily crosses both the bar and the background, so a fixed colour
-  cannot work *in principle*. Invent no new colors: alias existing ones
+  cannot work *in principle* (provably: the two 3:1 luminance ranges do not overlap), and in
+  dark mode it therefore carries a **fill plus a border**, one value per surface. A mark whose
+  legibility is a property of a PAIR needs its test written over the pair — a per-path hex
+  assertion cannot see it, and did not. Invent no new colors: alias existing ones
   (`_NEEDLE_PIVOT_COLOR = _SUNBURST_ROOT_COLOR`) so paired values cannot drift.

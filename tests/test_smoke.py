@@ -1059,6 +1059,53 @@ def test_build_chart_html_pins_the_chart_color_scheme(chart_type, dark):
     assert "color-scheme:only dark" not in html
 
 
+def _relative_luminance(hex_color):
+    """WCAG 2.x relative luminance of a #rrggbb string."""
+    raw = hex_color.lstrip("#")
+    channels = [int(raw[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    linear = [
+        c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast_ratio(a, b):
+    """WCAG contrast ratio between two #rrggbb strings, 1.0 (identical) to 21.0."""
+    la, lb = _relative_luminance(a), _relative_luminance(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def test_no_series_colour_collides_with_the_chart_chrome():
+    """No palette entry may BE a chrome colour, whoever chose the palette.
+
+    The guard that was missing. `_SUNBURST_ROOT_COLOR` had one — its whole definition is
+    "outside the palette" — but the chrome had none, and pointing DEFAULT_COLORS at a theme
+    is exactly the edit that can walk a chrome value into the categorical scale without any
+    single assertion noticing. It did: the upstream financial-dashboard template sets
+    `grayColor` and `chartCategoricalColors[6]` to the same #94a3b8, and `_DARK_CHROME`
+    copies `grayColor` for axis labels, legend hover and axis titles — so a 7-series dark
+    chart drew its 7th series in precisely the axis-label colour, at 1.00:1.
+
+    Stated as identity rather than as a contrast floor on purpose. A series and a gridline
+    MAY legitimately sit close (both are chosen from one restrained palette, and a low ratio
+    between a mark and a hairline is a design call); being the SAME string is never a design
+    call, it is two roles that have stopped being distinguishable. A ratio floor here would
+    either be so low it caught nothing or would start failing on defensible themes.
+    """
+    from highcharts_builder import _DARK_CHROME
+
+    for role, colour in _DARK_CHROME.items():
+        assert colour not in DEFAULT_COLORS, (
+            f"_DARK_CHROME[{role!r}] == {colour} is also a series hue "
+            f"(index {list(DEFAULT_COLORS).index(colour) if colour in DEFAULT_COLORS else '?'})"
+        )
+    # The off-palette marks are covered by their own tests; assert here only that they are
+    # likewise not chrome, which no other test says.
+    from highcharts_builder import _SUNBURST_ROOT_COLOR
+
+    assert _SUNBURST_ROOT_COLOR not in _DARK_CHROME.values()
+
+
 def _config_theme():
     """The `[theme]` table of .streamlit/config.toml, hex values case-normalized.
 
@@ -1069,8 +1116,12 @@ def _config_theme():
     import tomllib
 
     def norm(value):
-        # Only hex strings. The table also holds ints (headingFontWeights), font URLs
-        # and nested tables ([theme.sidebar]), which pass through untouched.
+        # Hex strings anywhere in the tree, including inside [theme.sidebar] — recursing into
+        # dicts as well as lists is what makes the docstring's promise true for the WHOLE
+        # table rather than only its top level. Ints (headingFontWeights), font URLs and
+        # everything else pass through untouched.
+        if isinstance(value, dict):
+            return {k: norm(v) for k, v in value.items()}
         if isinstance(value, list):
             return [norm(v) for v in value]
         if isinstance(value, str) and value.startswith("#"):
@@ -1107,6 +1158,26 @@ def test_theme_colors_stay_in_sync_with_config():
     from highcharts_builder import _DARK_CHROME, _HEATMAP_GRADIENT_DARK
 
     theme = _config_theme()
+    # Fail with the reason, not a KeyError. Moving these colours down into [theme.light] /
+    # [theme.dark] is the single most likely future edit here — it is literally what this
+    # file held before the theme change — and every assertion below would then die on a bare
+    # `KeyError: 'backgroundColor'`, which describes neither the cause nor the fix.
+    required = (
+        "backgroundColor",
+        "textColor",
+        "grayColor",
+        "borderColor",
+        "primaryColor",
+        "chartCategoricalColors",
+        "chartSequentialColors",
+    )
+    missing = [k for k in required if k not in theme]
+    assert not missing, (
+        f"[theme] is missing {missing}. If these moved into [theme.light]/[theme.dark], the "
+        f"app is no longer single-mode — see "
+        f"test_app_theme_is_a_single_mode_with_no_light_dark_toggle — and both this test and "
+        f"streamlit_app.py's `dark` derivation need revisiting together."
+    )
 
     # The series palette IS the theme's categorical scale — the whole list, in order.
     # Order, not just membership: _WATERFALL_UP_COLOR, _WATERFALL_DOWN_COLOR,
@@ -1129,7 +1200,12 @@ def test_theme_colors_stay_in_sync_with_config():
     # a legibility judgment settled by rendering, so pin the rule (both are on that scale)
     # rather than the indices, which would only restate the constant.
     sequential = theme["chartSequentialColors"]
-    assert set(_HEATMAP_GRADIENT_DARK.values()) <= set(sequential)
+    # The two NAMED keys, not .values(): the builder's own note says _themed swaps that dict
+    # "as one unit ... so the two can't drift if a key is ever added", so a `stops` list or a
+    # `dataClasses` entry is planned for — and would make a .values() subset check fail
+    # reporting a colour-scale problem that does not exist.
+    endpoints = {_HEATMAP_GRADIENT_DARK["minColor"], _HEATMAP_GRADIENT_DARK["maxColor"]}
+    assert endpoints <= set(sequential)
     # ...and that it IS a ramp: low end nearer the background than the high end. Reversed,
     # every heatmap would read inverted while every assertion above still passed.
     assert sequential.index(_HEATMAP_GRADIENT_DARK["minColor"]) < sequential.index(
@@ -5642,9 +5718,39 @@ def test_bullet_dark_mode_flips_both_hooks_and_leaks_into_no_later_light_chart()
     dark = _bullet_opts(dark=True)
     light_again = _bullet_opts()
 
-    crossbar = dark["plotOptions"]["bullet"]["targetOptions"]["color"]
+    target = dark["plotOptions"]["bullet"]["targetOptions"]
+    crossbar = target["color"]
+    # Read with a FALLBACK rather than by subscript, and deliberately: with no border, the
+    # fill is all the mark has, which is the state to be judged — not a KeyError. Delete the
+    # border half of the hook and this test must fail on the CONTRAST assertion below, the
+    # one it exists for; subscripting here would kill it two lines earlier and leave that
+    # assertion permanently unverified (the mutation rule: read the failure, not the exit
+    # code — a mutant caught by KeyError is still a hole).
+    edge = target.get("borderColor", crossbar)
+    width = target.get("borderWidth", 0)
     border = dark["plotOptions"]["bullet"]["borderColor"]
     background = dark["chart"]["backgroundColor"]
+    bar = DEFAULT_COLORS[0]
+
+    # THE PAIRING, and the assertion whose absence let a real regression ship green. Every
+    # other check here reads ONE value at ONE path; the crossbar's whole problem is that it
+    # spans two surfaces at once, so its legibility is a property of a PAIR and no
+    # single-value assertion can see it. Repointing DEFAULT_COLORS at the theme lightened the
+    # bar from #2563eb to #60a5fa and dropped the fill's contrast against it from 4.19:1 to
+    # 2.32:1 — every assertion in this test still passed, and the crossbar visibly washed out
+    # on exactly the rows where the measure beats the goal.
+    #
+    # Run the numbers and no single value CAN work: clearing 3:1 on the slate background
+    # needs a luminance >= 0.25, on the palette blue <= 0.087. So the requirement is stated
+    # over the pair — each surface must have a >= 3:1 partner among {fill, border} — which is
+    # a rule about the mark rather than a literal about today's theme, and survives the next
+    # palette the way a hardcoded hex would not.
+    assert (
+        max(_contrast_ratio(crossbar, background), _contrast_ratio(edge, background))
+        >= 3.0
+    )
+    assert max(_contrast_ratio(crossbar, bar), _contrast_ratio(edge, bar)) >= 3.0
+    assert width >= 1
 
     # Hook one: the border dissolves INTO the background; light mode is untouched.
     assert border == background
@@ -5658,13 +5764,22 @@ def test_bullet_dark_mode_flips_both_hooks_and_leaks_into_no_later_light_chart()
     # background, so an unflipped crossbar is an invisible one.
     assert light["plotOptions"]["bullet"]["targetOptions"]["color"] == background
     # And the hue reaches the JS at the level it was written to — not merely somewhere in the
-    # chrome, which is what `"#f1f5f9" in js` would have settled for.
+    # chrome, which is what `"#f1f5f9" in js` would have settled for. (highcharts-core emits
+    # the keys alphabetically, so borderColor/borderWidth lead.)
     flat = "".join(_bullet_js(dark=True).split())
-    assert f"targetOptions:{{color:'{crossbar}'}}" in flat
+    assert (
+        f"targetOptions:{{borderColor:'{edge}',borderWidth:{width},color:'{crossbar}'}}"
+        in flat
+    )
 
     # The leak check proper: a light chart built AFTER a dark one is still light.
     assert light_again["plotOptions"]["bullet"]["targetOptions"]["color"] == "#0f172a"
     assert "borderColor" not in light_again["plotOptions"]["bullet"]
+    # The border is a DARK-mode repair, not a permanent part of the mark: in light mode the
+    # near-black fill already clears both surfaces (17.9:1 on white, 7.0:1 on the bar), so
+    # adding one there would be decoration. Its absence is what says the hook is targeted.
+    assert "borderColor" not in light_again["plotOptions"]["bullet"]["targetOptions"]
+    assert "borderWidth" not in light["plotOptions"]["bullet"]["targetOptions"]
     # The bar hue itself is unchanged across the flip: like the shared palette, it reads on both
     # backgrounds, so only the border and the crossbar move.
     assert dark["colors"] == light["colors"] == list(DEFAULT_COLORS)

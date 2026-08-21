@@ -32,8 +32,10 @@ baseRadius = "6px"                   # subtle rounding - professional, not playf
 buttonRadius = "6px"
 
 # Typography - clean, professional fonts
+# One request, not two: the upstream template also sets `headingFont` to Inter at
+# wght@600;700, a strict SUBSET of the weights below — a second render-blocking fetch
+# from fonts.googleapis.com for no visual difference. Headings inherit `font`.
 font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-headingFont = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
 codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
 baseFontSize = 14
 baseFontWeight = 400
@@ -57,6 +59,15 @@ grayColor = "#94a3b8"   # neutral/secondary text (== _DARK_CHROME["muted"])
 # total, the heatmap ramp's high end, bullet's bar), 1 is the green a waterfall rise
 # takes, and 3 is the red a fall and a boxplot outlier take. Reordering repaints those
 # meanings.
+#
+# ONE DELIBERATE DEVIATION from the upstream template: index 6 is pink-400 (#f472b6),
+# not the template's gray #94a3b8. The template sets grayColor to that same gray, and
+# _DARK_CHROME["muted"] copies grayColor for axis labels, legend hover and axis titles —
+# so a 7-series chart drew its 7th series in exactly the axis-label colour, a 1.00:1
+# collision. The gray had to leave the *categorical* scale rather than the chrome,
+# because chrome is what the shell and the chart must agree on. Pink also restores the
+# hue this palette's predecessor carried at index 6. Guarded by
+# test_no_series_colour_collides_with_the_chart_chrome.
 chartCategoricalColors = [
     "#60a5fa",
     "#34d399",
@@ -64,7 +75,7 @@ chartCategoricalColors = [
     "#f87171",
     "#fbbf24",
     "#38bdf8",
-    "#94a3b8",
+    "#f472b6",
     "#fb923c",
 ]
 

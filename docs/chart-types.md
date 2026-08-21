@@ -695,7 +695,23 @@ that flips a MARK rather than chrome**. That is a principle, not a preference: a
 marker necessarily crosses **both** the bar (a constant palette blue in both themes) *and* the
 background (white → slate), so a fixed colour cannot work **in principle** — a near-black reads on
 the light shell and disappears on the dark one, a near-white does the exact reverse, and both were
-rendered to confirm it. Where every border dissolve above matches a mark **to** the background,
+rendered to confirm it.
+
+That "in principle" is now **arithmetic** rather than a rendered impression, and the arithmetic
+changed the fix. Against the theme's palette, clearing WCAG 3:1 on the slate background needs a
+relative luminance ≥ 0.25 and on the palette blue needs ≤ 0.087: the two ranges do not overlap, so
+no single value exists *at all*. The flip therefore carries **two** values in dark mode — a light
+fill (16.3:1 on the background) plus `_BULLET_TARGET_BORDER_WIDTH` of `_DARK_CHROME["bg"]` border
+(7.0:1 on the bar) — because a mark spanning two surfaces needs one value per surface. Light mode
+keeps a single near-black fill, which does clear both (17.9:1 and 7.0:1); the border is a
+dark-mode repair, not part of the mark.
+
+This was found the hard way: adopting the theme's palette lightened the bar from `#2563eb` to
+`#60a5fa` and dropped the fill's contrast against it from 4.19:1 to **2.32:1**, and *every* bullet
+test stayed green — they each assert one hue at one path, and legibility here is a property of a
+**pair**. The test now states the pair as a rule (each surface must have a ≥ 3:1 partner among
+{fill, border}) rather than as a hex, so the next palette is checked too. Where every border
+dissolve above matches a mark **to** the background,
 this one matches it **against** the background; `_BULLET_TARGET_COLOR` is `_DARK_CHROME["bg"]` read
 the other way round, so the pair the crossbar swings between is exactly the pair the app shell does
 and neither can drift (`_NEEDLE_PIVOT_COLOR = _SUNBURST_ROOT_COLOR`'s aliasing rule). Highcharts'
@@ -2021,7 +2037,9 @@ that it is **re-derived** when the aggregation changes.
   so it necessarily crosses **both** the bar (a constant palette blue in both themes) *and* the
   chart background (white → slate), and a fixed colour therefore cannot work **in principle** —
   a near-black reads on the light shell and disappears on the dark one, a near-white does the
-  exact reverse (both rendered). Where every `borderColor` dissolve matches a mark **to** the
+  exact reverse (both rendered) — and against the current palette the two 3:1 ranges provably do
+  not overlap, so in dark mode the mark carries a **fill and a border**, one per surface. Where
+  every `borderColor` dissolve matches a mark **to** the
   background, this hook matches one **against** it, and its light-mode value
   (`_BULLET_TARGET_COLOR`) is `_DARK_CHROME["bg"]` read the other way round, so the pair the
   crossbar swings between cannot drift from the pair the app shell uses

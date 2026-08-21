@@ -464,6 +464,12 @@ UNWEIGHTED_NODE_LINK_TYPES = NETWORKGRAPH_TYPES + ORGANIZATION_TYPES
 # it by index: 0 is the brand primary, 1 the green a waterfall rise takes, 3 the red a
 # fall and a boxplot outlier take. Reordering the config list repaints those.
 #
+# Index 6 is the one entry that does NOT match the upstream financial-dashboard template,
+# and config.toml carries the argument: the template's gray there is also its `grayColor`,
+# which _DARK_CHROME["muted"] copies, so series 7 was drawn in the axis-label colour at
+# 1.00:1. It is pink here instead. test_no_series_colour_collides_with_the_chart_chrome
+# is what keeps that class of collision from coming back through a future theme.
+#
 # The palette is shared across light and dark (only the chart chrome flips — see
 # _themed), so a series keeps its color between the two. The app itself now resolves to
 # dark for every viewer (the config is a single [theme], which locks the mode), but
@@ -476,7 +482,7 @@ DEFAULT_COLORS = (
     "#f87171",  # red
     "#fbbf24",  # yellow
     "#38bdf8",  # sky
-    "#94a3b8",  # gray
+    "#f472b6",  # pink (see config.toml: the ONE deviation from the template)
     "#fb923c",  # orange
 )
 
@@ -635,6 +641,21 @@ _SUNBURST_ROOT_COLOR = "#64748b"  # slate: the app's "not a category" grey
 # palette entry can say it — and a caller's custom `colors` must not repaint it into looking like
 # a series.
 _BULLET_TARGET_COLOR = _DARK_CHROME["bg"]  # slate-900: read against every bar
+# The crossbar's DARK-mode border, and the reason it needs one at all. In light mode the
+# near-black fill above clears both backgrounds it crosses (17.9:1 on white, 7.0:1 on the
+# bar). In dark mode it cannot: clearing 3:1 against the slate background needs a relative
+# luminance >= 0.25, and against the palette blue needs <= 0.087, so NO single value exists
+# — the hook's "cannot work in principle" is literally true once the numbers are run, and it
+# is not a matter of picking a better hue. A mark spanning two backgrounds needs two values,
+# which is what a fill plus a border is. The light fill keeps 16.3:1 on the background; this
+# border carries the bar half at 7.0:1.
+#
+# A numeric key under `targetOptions` is exactly what the branch below warns about, so: this
+# is a module CONSTANT, never derived from a frame and never a column, so neither the
+# numpy.int64 rejection nor the `width = 0` EmptyValueError is reachable through it. The
+# warning there is about wiring GEOMETRY to data; the crossbar's 140% x 3px is still left
+# entirely alone.
+_BULLET_TARGET_BORDER_WIDTH = 1
 # The BEFORE marker's hue, and the whole of what makes a dumbbell directional. The AFTER marker and
 # the connector take `colors[0]` (the reading is the CURRENT state and the delta that reached it),
 # so the before needs a hue that is legible beside them without competing — and, being the state
@@ -1102,7 +1123,17 @@ def _themed(options: dict, *, dark: bool) -> dict:
         # into every later light-mode chart in the same process, and a KeyError here would mean the
         # branch changed underneath this hook (treemap's/waterfall's convention: the loud failure
         # is wanted).
-        options["plotOptions"]["bullet"]["targetOptions"]["color"] = t["text"]
+        #
+        # BOTH halves are written, and the border is not decoration: measured against the
+        # palette the app actually ships, the light fill alone reaches only 2.32:1 on the bar
+        # (it was 4.19:1 against the previous, darker brand blue — the regression that
+        # adopting the theme's palette introduced, invisible to every test here because they
+        # assert the hue AT its path and never the PAIRING it has to survive). The border is
+        # the bar-half of a value that cannot be one value; see _BULLET_TARGET_BORDER_WIDTH.
+        target_options = options["plotOptions"]["bullet"]["targetOptions"]
+        target_options["color"] = t["text"]
+        target_options["borderColor"] = t["bg"]
+        target_options["borderWidth"] = _BULLET_TARGET_BORDER_WIDTH
     if options["chart"].get("type") == "pie":
         pie = options["plotOptions"]["pie"]
         pie["dataLabels"] = {**pie.get("dataLabels", {}), "color": t["text"]}
