@@ -1107,10 +1107,11 @@ def test_app_theme_is_a_single_mode_with_no_light_dark_toggle():
     # mode. This app is deliberately locked to DARK, and that decision has to have a second
     # home or it can be undone by re-adding a subtable that nothing objects to.
     #
-    # It is not cosmetic. streamlit_app.py derives `dark` from st.context.theme.type and
-    # threads it into every renderer's cache key, so the mode the shell resolves to is the
-    # mode the CHART is built for. A [theme] that went light-based while _themed kept
-    # painting slate would put a dark chart on a light shell.
+    # It is not cosmetic, and the reason INVERTED when the `dark=` flag was removed. The
+    # app no longer reads the theme at all: `_themed` paints slate unconditionally because
+    # a lone [theme] guarantees the dark shell. The chart therefore does not FOLLOW the
+    # shell, it ASSUMES it — so re-adding a subtable would put a dark chart on a light one
+    # with nothing at runtime objecting. This assertion is the only thing that would.
     theme = _config_theme()
     assert theme["base"] == "dark"
     assert "light" not in theme and "dark" not in theme, (
@@ -9115,6 +9116,79 @@ def test_app_multiple_series_selected(app):
     assert not app.exception
     js = app.code[0].value
     assert "revenue" in js and "cost" in js
+
+
+def _chart_type_selectbox(app):
+    """The Chart type selectbox, by LABEL — see `_pick_sample` on why not by position."""
+    return next(sb for sb in app.selectbox if sb.label == "Chart type")
+
+
+def test_app_y_selection_survives_a_label_only_chart_type_switch(app):
+    # solidgauge -> gauge changes exactly ONE thing about the Y widget: the noun in its
+    # label ("Rings (Y)" -> "Needles (Y)", a deliberate distinction). The option list is
+    # `numeric_cols` for both, so the user's answer is still valid across the switch and
+    # must survive it.
+    #
+    # It only survives because the widget is KEYED. `compute_and_register_element_id`
+    # folds every command kwarg into a KEYLESS widget's identity — the LABEL included, not
+    # just the `index`/`default` the sidebar's other comments name — so without `key=` this
+    # switch re-mints the pills and silently resets the selection. Deleting `key=y_key`
+    # fails this test; that is the whole point of it.
+    _chart_type_selectbox(app).set_value("solidgauge").run()
+    assert not app.exception
+    rings = next(p for p in app.pills if p.label.startswith("Rings"))
+    rings.set_value(["revenue", "cost"]).run()
+    assert not app.exception
+
+    _chart_type_selectbox(app).set_value("gauge").run()
+    assert not app.exception
+    needles = next(p for p in app.pills if p.label.startswith("Needles"))
+    assert list(needles.value) == ["revenue", "cost"], (
+        "the Y selection was reset by a chart-type switch that changed only the label — "
+        "the pills lost their key"
+    )
+
+
+def test_app_x_selection_survives_a_label_only_chart_type_switch(app):
+    # The X selectbox's half of the same claim: line -> scatter relabels it
+    # "Category (X) axis" -> "X axis" while the choices stay `df.columns`, so a keyless
+    # widget would re-mint and drop a still-valid answer. "cost" rather than the default
+    # "month" so a carried-over value is distinguishable from a reset one.
+    x_axis = next(sb for sb in app.selectbox if sb.label == "Category (X) axis")
+    x_axis.set_value("cost").run()
+    assert not app.exception
+
+    _chart_type_selectbox(app).set_value("scatter").run()
+    assert not app.exception
+    assert next(sb for sb in app.selectbox if sb.label == "X axis").value == "cost", (
+        "the X selection was reset by a chart-type switch that changed only the label — "
+        "the selectbox lost its key"
+    )
+
+
+def test_app_dataset_switch_reconciles_a_stale_y_selection(app):
+    # The other half of keying the Y pills. A key makes `default=` first-render-only, and
+    # Streamlit's multiselect/pills FILTER a stored selection against the current options
+    # rather than resetting it (selectbox is the one that resets, which is why X needs no
+    # guard) — so a Dataset switch leaves Y EMPTY and drops the page onto the "Pick at least
+    # one numeric column" guard, where the keyless version showed a chart. That is a degraded
+    # landing, not a crash, and it is what the reconciliation in front of the widget exists to
+    # undo. Narrowing it to `if stored is None:` (seed-only) fails this test with `Y is []`.
+    from sample_data import SAMPLES
+
+    app.pills[0].set_value(["revenue", "cost"]).run()
+    assert not app.exception
+
+    other = next(key for key in SAMPLES if "(pie/bar/column)" in key)
+    next(sb for sb in app.selectbox if sb.label == "Dataset").set_value(other).run()
+    assert not app.exception, (
+        f"a stale Y selection survived into {other!r} and reached the builder"
+    )
+    selected = list(app.pills[0].value)
+    available = list(SAMPLES[other]().select_dtypes("number").columns)
+    assert selected and set(selected) <= set(available), (
+        f"Y is {selected}, which is not a non-empty subset of {available}"
+    )
 
 
 def test_app_x_equals_y_shows_guard_warning(app):

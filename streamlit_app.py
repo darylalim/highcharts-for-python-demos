@@ -288,6 +288,41 @@ def cached_chart_js(
     ).to_js_literal()
 
 
+# The KPI's mark count, cached for the same reason the three renderers are — and it is
+# the same WORK, not a cheap tally: for sunburst and xrange `count_marks` reuses the whole
+# build rather than a drop predicate (the "whole-build reuse" its own comments name), so an
+# uncached call built those two charts a SECOND time on every rerun, including the reruns
+# that cannot change the number — a Height drag, a title edit, a render-mode flip, a
+# config-panel toggle. Measured on this venv a sunburst frame costs ~6ms at 2k rows and
+# ~800ms at 200k, against a 2-16ms key hash, so the win is an uploaded CSV's, not a sample's.
+#
+# NOT a member of tests/test_smoke.py's `_CACHE_LAYER`, and that is deliberate rather than an
+# omission: `_FORWARDED` is DERIVED from the three BUILDERS' shared keyword-only parameters,
+# so it names size_col/high_col/goal_col/width_col/after_col/agg/dial too — kwargs
+# `count_marks` does not take and must not be handed. This wrapper forwards the three that
+# name a column it actually reads; the call site below passes them by keyword for the same
+# transposition reason the ast test enforces there.
+@st.cache_data(show_spinner=False, max_entries=128)
+def cached_count_marks(
+    df,
+    chart_type,
+    x_col,
+    y_cols,
+    target_col,
+    parent_col,
+    end_col,
+) -> int:
+    return count_marks(
+        df,
+        chart_type,
+        x_col,
+        list(y_cols),
+        target_col=target_col,
+        parent_col=parent_col,
+        end_col=end_col,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Header
 # --------------------------------------------------------------------------- #
@@ -304,11 +339,18 @@ st.caption(
 # --------------------------------------------------------------------------- #
 with st.sidebar:
     st.header(":material/database: 1 · Data")
-    source = (
-        st.segmented_control(
-            "Source", ["Sample dataset", "Upload CSV"], default="Sample dataset"
-        )
-        or "Sample dataset"
+    # `required=True` is what makes this return a plain `str` rather than `str | None`:
+    # a single-select segmented control otherwise lets a user DESELECT the active option,
+    # and the `or "Sample dataset"` this replaces papered over that by snapping the app
+    # back to the default while the control itself still rendered EMPTY — the widget and
+    # the page disagreeing about what is active. `required` refuses the deselect at the
+    # widget instead, so there is no None to absorb. `default=` stays: the guaranteed-str
+    # overload needs BOTH, and `required=True` alone would return `str | None` again.
+    source = st.segmented_control(
+        "Source",
+        ["Sample dataset", "Upload CSV"],
+        default="Sample dataset",
+        required=True,
     )
 
     if source == "Sample dataset":
@@ -580,7 +622,27 @@ with st.sidebar:
     # passing a column the builder must ignore lies in the call site AND in three cache keys
     # (the chart would re-render on a change that cannot affect it). `build_options` takes
     # `str | None` precisely so this can be honest.
-    x_col = None if chart_type in GAUGE_TYPES else st.selectbox(x_label, df.columns)
+    if chart_type in GAUGE_TYPES:
+        x_col = None
+    else:
+        # KEYED, and the key is what stops the LABEL from re-minting this widget. `x_label`
+        # differs across fifteen branches ("Slice labels", "Lane", "Source (from)", "Employee",
+        # …) and Streamlit folds every command kwarg into a KEYLESS widget's identity — label
+        # included, not just the `index` the comments below name — so changing chart type
+        # discarded a perfectly valid X. By the rule the dial states further down (fold the
+        # default into the widget's identity iff the selection DEPENDS on the state the default
+        # derives from) that re-mint was never wanted here: the choices are `df.columns` for
+        # every type, so the user's answer stays valid across the switch.
+        #
+        # NO reconciliation here, and that asymmetry with the Y pickers below is Streamlit's,
+        # not an oversight. `resolve_value_against_options` RESETS a selectbox whose stored
+        # value is no longer among its options, and it resets to the same `index=0` a hand-
+        # written guard would pick — verified by removing this key's guard and switching
+        # datasets: X went to the new frame's first column on its own. A guard here would be
+        # theatre, a branch that cannot change the outcome. The Y pickers need one because
+        # multiselect does NOT do this (see there); the two behaviours differ, so the code
+        # differs.
+        x_col = st.selectbox(x_label, df.columns, key="x_col")
 
     # The node-link types' second node column, sitting next to Source so the two ends of a link
     # read as a pair. Drawn from every column, not numeric_cols like bubble's
@@ -660,17 +722,45 @@ with st.sidebar:
         # the narrow sidebar, so fall back to st.multiselect (a dropdown, and
         # inherently multi — hence no selection_mode and the two separate calls).
         # The empty-set guard in the main panel handles a cleared selection.
-        # A constant default (not one derived from x_col): these widgets are
-        # keyless, so Streamlit folds `default` into their identity — a default
-        # that varied with X would re-mint the widget and silently reset the
-        # user's Y selection whenever they changed X.
-        default = numeric_cols[:1]
-        if len(numeric_cols) <= MAX_PILL_OPTIONS:
-            y_cols = st.pills(
-                y_label, numeric_cols, selection_mode="multi", default=default
-            )
+        #
+        # KEYED, for the X selectbox's reason: `y_label` varies with chart type ("Rings (Y)"
+        # vs "Needles (Y)", "Value columns (Y)" vs "Series (Y)") and a keyless widget folds
+        # its label into its identity, so a solidgauge -> gauge switch reset a selection that
+        # was still entirely valid. `numeric_cols` is the option list for EVERY type that
+        # reaches this branch, so the Y answer does not depend on chart type at all.
+        #
+        # TWO keys, not one: past MAX_PILL_OPTIONS a different WIDGET is drawn, and a shared
+        # key would carry a selection across that boundary.
+        #
+        # NO `default=` argument, and that is the key's doing rather than an omission. With a
+        # key, `default=` is honoured on the FIRST render only — exactly what the seed below
+        # does — so passing both would be two claims on one value, which Streamlit itself
+        # objects to: `check_widget_policies` logs "created with a default value but also had
+        # its value set via the Session State API" when a keyed widget has both (selectbox is
+        # exempt only because it reports `default_value=None` at `index == 0`). One writer.
+        constant_default = numeric_cols[:1]
+        use_pills = len(numeric_cols) <= MAX_PILL_OPTIONS
+        y_key = "y_pills" if use_pills else "y_multiselect"
+        # Seed on the first render, reconcile STALE names after — but never an EMPTY selection.
+        #
+        # What this prevents is a DEGRADED landing, not a crash. Streamlit's multiselect (and
+        # pills) FILTER a stored selection against the current options rather than resetting it
+        # the way selectbox does, so a Dataset switch would leave Y empty and drop the page onto
+        # the "Pick at least one numeric column" guard — where the keyless version showed a
+        # chart. Re-seeding restores that: a dataset switch lands on a drawing again.
+        #
+        # It must not fire on an EMPTY selection, though. `set() <= anything` is True, so a user
+        # who clears every pill keeps it cleared and the guard is still reachable from the UI;
+        # re-seeding there would make it unreachable and pin a guard nothing could trigger.
+        # `.get()` returning None is the first render and the one case that is not a
+        # reconciliation at all: a stored `[]` is a deliberate answer, `None` is no answer yet.
+        stored = st.session_state.get(y_key)
+        if stored is None or not set(stored) <= set(numeric_cols):
+            st.session_state[y_key] = constant_default
+        if use_pills:
+            y_cols = st.pills(y_label, numeric_cols, selection_mode="multi", key=y_key)
         else:
-            y_cols = st.multiselect(y_label, numeric_cols, default=default)
+            y_cols = st.multiselect(y_label, numeric_cols, key=y_key)
     else:
         # Xrange is the one type whose Y control is NOT sourced from numeric_cols. Its Y is a
         # bar's START — a coordinate, which may be a date, and a date column is object dtype,
@@ -687,8 +777,9 @@ with st.sidebar:
         ]
     # Normalize the widgets' loosely-typed return (pills/multiselect/selectbox) to a
     # concrete list[str] — the column names already are strings, so this only pins the
-    # type, letting the uncached `count_marks` type-check without threading everything
-    # through a cache wrapper. An empty selection stays empty for the main-panel guard.
+    # type. It is what lets every consumer below take a `list[str]` without re-narrowing:
+    # the guards, the four cache wrappers' `tuple(y_cols)` call sites, and `gauge_dial`.
+    # An empty selection stays empty for the main-panel guard.
     y_cols = [str(col) for col in y_cols]
 
     # Xrange's second coordinate column, sitting right after Start so the two ends of a bar
@@ -865,7 +956,9 @@ with st.sidebar:
         agg = st.selectbox(
             "Reduce each column by",
             GAUGE_AGGREGATIONS,  # from the builder: it can never offer one the builder rejects
-            index=0,  # a CONSTANT index, like every other keyless picker in this sidebar
+            index=0,  # a CONSTANT index, like every other KEYLESS picker in this sidebar
+            # (X and Y are keyed instead — their choices don't vary with chart type, so
+            # a label-driven re-mint there discarded a still-valid answer)
             help="Each mark shows its column collapsed to **one** number.",
         )
         # The default dial comes FROM THE BUILDER — the very `gauge_dial` call `build_options`
@@ -888,11 +981,15 @@ with st.sidebar:
         # number becomes permanent and silent. The re-mint is also visible (the box shows the
         # new derived number) and is scoped to the derivation, not to every rerun: a typed dial
         # survives a title edit, a height drag and a render-mode switch.
-        dial_min, dial_max = st.columns(2)
-        dial = (
-            float(dial_min.number_input("Dial min", value=float(low))),
-            float(dial_max.number_input("Dial max", value=float(high))),
-        )
+        # A horizontal container, not st.columns(2): this is a plain two-widget row, not
+        # a fixed grid or a deliberate width ratio (the st.columns([3, 2]) in the main
+        # panel is the latter and stays). It is the KPI row's pattern, and it WRAPS rather
+        # than cramming two steppers into half a narrow sidebar.
+        with st.container(horizontal=True):
+            dial = (
+                float(st.number_input("Dial min", value=float(low))),
+                float(st.number_input("Dial max", value=float(high))),
+            )
 
     # A stable key keeps a typed title across reruns; an empty field falls back
     # to a per-chart-type default (shown as the placeholder, applied in
@@ -905,19 +1002,20 @@ with st.sidebar:
     height = st.slider("Height (px)", min_value=300, max_value=800, value=480, step=20)
 
     st.header(":material/tune: 3 · Render")
-    render_mode = (
-        st.segmented_control(
-            "Mode",
-            RENDER_MODES,
-            default=MODE_INTERACTIVE,
-            help=(
-                "- **Interactive** — Highcharts loads from the CDN in a sandboxed "
-                "iframe.\n"
-                "- **Static PNG** — rendered server-side via the Highcharts export "
-                "server; the browser loads no Highcharts JS."
-            ),
-        )
-        or MODE_INTERACTIVE
+    # `required=True` for the Source control's reason: it refuses the deselect at the
+    # widget rather than absorbing the resulting None downstream, so the control can never
+    # render empty while the page renders a chart.
+    render_mode = st.segmented_control(
+        "Mode",
+        RENDER_MODES,
+        default=MODE_INTERACTIVE,
+        required=True,
+        help=(
+            "- **Interactive** — Highcharts loads from the CDN in a sandboxed "
+            "iframe.\n"
+            "- **Static PNG** — rendered server-side via the Highcharts export "
+            "server; the browser loads no Highcharts JS."
+        ),
     )
 
 
@@ -948,11 +1046,11 @@ with st.container(horizontal=True):
     # fires. It needs no special case here; one branch, however many count-adaptive types there
     # are (the MARK_METRICS property), and sankey's own collision is already treated this way.
     if chart_type in MARK_METRICS:
-        marks = count_marks(
+        marks = cached_count_marks(
             df,
             chart_type,
             x_col,
-            y_cols,
+            tuple(y_cols),
             target_col=target_col,
             parent_col=parent_col,
             end_col=end_col,
@@ -1130,7 +1228,8 @@ with left.container(border=True, height="stretch"):
         st.warning(
             f"The Before column **{y_cols[0]}** can't also be the After column — "
             "a dumbbell needs two different readings to draw a change between them. "
-            "Pick a different After column."
+            "Pick a different After column.",
+            icon=":material/warning:",
         )
         st.stop()
     # And the columns' own contradiction, the one reachable from HERE: a date start beside a
@@ -1246,8 +1345,11 @@ with left.container(border=True, height="stretch"):
             agg=agg,
             dial=dial,
         )
-        # The HTML is embedded in a sandboxed iframe with a FIXED height — it
-        # does not auto-grow to its content, so size it to the chart.
+        # The HTML is embedded in a sandboxed iframe with a FIXED height. st.iframe
+        # DOES measure its content by default (`height="content"`), so the pin is a
+        # choice, not a workaround: the same `height` feeds build_chart_html and the
+        # sidebar's Height (px) slider, and letting the iframe self-measure would sever
+        # that slider from the embed it is supposed to size. +24px for the chrome.
         st.iframe(html, height=height + 24)
         st.caption(
             "Interactive chart — Highcharts JS is loaded from the CDN in the browser."

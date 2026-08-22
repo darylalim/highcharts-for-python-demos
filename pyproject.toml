@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "highcharts-studio"
-version = "0.18.0"
+version = "0.18.1"
 description = "Streamlit application for building data visualizations with Highcharts."
 # SPDX expression (PEP 639). Covers this project's own code only; the Highcharts
 # JS/export server and the highcharts-core wrapper are proprietary and
@@ -25,7 +25,7 @@ dependencies = [
     "pandas>=2.2.0",
     # Pinned to the Streamlit version this app is developed and CI-tested
     # against; it also relies on recent APIs (st.iframe, st.badge, st.pills,
-    # st.multiselect, st.toggle, st.segmented_control, st.context.theme,
+    # st.multiselect, st.toggle, st.segmented_control (with `required`),
     # width/height="stretch", bordered st.metric KPI cards in an
     # st.container(horizontal=True) row, and the extended theming keys
     # .streamlit/config.toml now uses — chartCategoricalColors,

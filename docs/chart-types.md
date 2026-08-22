@@ -1311,9 +1311,10 @@ not merely the format string that used to hide the absurd number.
   `count_marks` rule that did nothing but restate `len(y_cols)` — the can't-drift rule
   run backwards, a second computation of a fact that cannot differ from the first), the
   render-mode
-  selector (interactive iframe / static PNG), reading the active light/dark theme
-  (`st.context.theme.type`) so the charts render theme-aware, the chart embed,
-  and a toggle that reveals the generated Highcharts config (JS).
+  selector (interactive iframe / static PNG), the chart embed, and a toggle that reveals
+  the generated Highcharts config (JS). No theme is read: `.streamlit/config.toml` is a
+  single `[theme]`, so every viewer gets the dark shell and `_themed` applies the dark
+  chrome unconditionally rather than following a flag.
   The **no-plottable-columns gate** runs *below* the chart-type selectbox and is
   type-aware, which xrange forced: every other type needs a NUMBER, but xrange's
   start/end are coordinates and may be dates — and a date column is object dtype, so
@@ -1812,8 +1813,11 @@ would report that every category hit target precisely; plus the
 whatsoever*, which must plot as an xrange and must still be refused by `line`).
 
 Gauge's two AppTest halves are worth naming, because together they *define* the keyless-widget
-rule rather than merely obeying it. The Dial inputs carry **no `key=`**, and unlike every other
-picker here that is the intended behaviour, not the bug the constant `index`es guard against.
+rule rather than merely obeying it. The Dial inputs carry **no `key=`**, and alone among this
+sidebar's widgets the re-mint is the intended behaviour rather than the bug the other pickers
+defend against — the extra-column selectors with a constant `index`, and the X/Y pickers with an
+actual `key=` (their labels vary by chart type, and a keyless widget folds its LABEL into its
+identity too, so only a key stops a relabel from discarding a still-valid column).
 The rule those comments were always applying, stated: *fold the default into the widget's
 identity iff the selection depends on the state the default derives from.* Sankey's Target
 derives from another **widget** and stays perfectly valid when Source changes, so re-minting it

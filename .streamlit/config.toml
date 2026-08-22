@@ -4,9 +4,15 @@
 #
 # It is a SINGLE [theme] table, and that is the point: defining both [theme.light]
 # and [theme.dark] is what unlocks the light/dark toggle in the app's settings menu,
-# so a lone [theme] locks the app to one mode — here, dark. `st.context.theme.type`
-# therefore reads "dark" for every viewer, and streamlit_app.py hands the builder
-# dark=True on every render.
+# so a lone [theme] locks the app to one mode — here, dark. Every viewer therefore
+# resolves to the dark shell, which is what lets the builder theme UNCONDITIONALLY:
+# there is no theme read in streamlit_app.py and no `dark=` flag on any builder, because
+# a branch that cannot vary (and a cache key that cannot vary with it) would be theatre.
+# What that trades away is self-correction — the chart no longer FOLLOWS the shell, it
+# assumes it — so re-adding a subtable here would put dark charts on a light shell with
+# nothing at runtime objecting. tests/test_smoke.py::
+# test_app_theme_is_a_single_mode_with_no_light_dark_toggle is the only thing standing
+# between that edit and a silently wrong render.
 #
 # The Highcharts charts render in an iframe / server-side PNG, so NONE of these colors
 # reach them — not even chartCategoricalColors, which Streamlit applies only to its own

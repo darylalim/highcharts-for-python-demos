@@ -33,6 +33,87 @@ worth stating rather than tidying away:
 
 Dates are the last commit at that version — the point it stopped being current.
 
+## [0.18.1] - 2026-08-22
+
+An audit of `streamlit_app.py` against the reference docs bundled inside Streamlit's own
+package (1.62.0, `streamlit/.agents/skills/developing-with-streamlit/`). Every finding was
+checked against this repo's decisions before being acted on, and several were **rejected** for
+contradicting them — "prefer Vega-based charts" is void in a Highcharts-only app, and so is any
+advice to restore a light/dark toggle. No new capability, so a patch.
+
+### Fixed
+
+- **A chart-type switch silently discarded a still-valid X or Y selection.** `x_label` and
+  `y_label` vary across roughly fifteen branches ("Rings (Y)" vs "Needles (Y)", "Slice labels" vs
+  "Lane"), and `compute_and_register_element_id` folds every command kwarg into a **keyless**
+  widget's identity — the **label** included, not merely the `index`/`default` the sidebar's
+  comments already guarded. So relabelling the widget re-minted it and reset the user's answer,
+  even though `numeric_cols` / `df.columns` were identical on both sides of the switch. The three
+  pickers now carry a `key=`. This is the rule stated at the dial (*fold the default into the
+  widget's identity iff the selection depends on the state the default derives from*) going
+  unapplied in one place, not a rule the file did not know.
+- **The two families behave differently on a stale value, and the code now differs with them.**
+  `selectbox` **resets** to its default when the stored value is no longer among its options, so
+  keyed X needs no reconciliation and a guard there would be theatre — verified by removing it and
+  switching datasets, where X went to the new frame's first column unaided. `multiselect`/`pills`
+  instead **filter** to `[]`, which would drop the page onto the empty-Y guard where the keyless
+  version drew a chart, so keyed Y re-seeds. It re-seeds on a **stale** selection only, never an
+  empty one: `set() <= anything` is True, so a cleared selection stays cleared and the guard stays
+  reachable. Re-seeding there would have pinned a guard nothing could trigger.
+- **Both `st.segmented_control`s could render EMPTY while the app drew a chart.** A single-select
+  segmented control lets a user deselect and returns `None`; the `or "Sample dataset"` /
+  `or MODE_INTERACTIVE` fallbacks absorbed that downstream, leaving the widget and the page
+  disagreeing about what was active. `required=True` refuses the deselect at the widget, so there
+  is no `None` to absorb — and it is what makes the call return a plain `str`, which is the
+  narrowing the `or` was really doing. `default=` stays: the guaranteed-`str` overload needs both.
+- **The dumbbell `Before == After` guard was the only callout on the page with no icon.** Its nine
+  sibling collision guards, the three builder-diagnosis warnings and both `st.error`s all pass
+  `icon=":material/warning:"`; this one read as a different class of message than the guards it is
+  deliberately modelled on.
+- **Four files still described a `st.context.theme.type` read and a `dark=` flag removed in
+  0.18.0.** `pyproject.toml` listed `st.context.theme` among the APIs justifying the Streamlit
+  floor, `.streamlit/config.toml` said the app "hands the builder `dark=True` on every render",
+  `docs/chart-types.md` called the charts theme-aware, and `test_smoke.py`'s comment claimed the
+  flag was threaded into every renderer's cache key. The app calls no `st.context` API at all —
+  `_themed` paints unconditionally because a lone `[theme]` guarantees the dark shell. The four now
+  say why that makes `test_app_theme_is_a_single_mode_with_no_light_dark_toggle` load-bearing:
+  the chart does not follow the shell, it assumes it. The CHANGELOG entries below, and
+  `docs/decisions.md`, are left alone — those are correct records of the removal.
+- **The iframe comment asserted an API fact that is false.** It said the embed "does not auto-grow
+  to its content", which describes the legacy `st.components.v1.html`. `st.iframe` signs as
+  `height: int | Literal["stretch", "content"] = "content"` and measures HTML-string content by
+  default. The explicit height stays — the same value feeds `build_chart_html` and the Height (px)
+  slider, and self-measuring would sever the slider from the embed it exists to size — but it is
+  now documented as a choice rather than a workaround.
+
+### Added
+
+- **`cached_count_marks`, the KPI's mark count behind `@st.cache_data`.** It was the one
+  DataFrame-consuming call in the app that was not, and for sunburst and xrange it is not a cheap
+  tally either: `count_marks` reuses the **whole build** for those two, so an uncached call built
+  the chart a second time on every rerun — including reruns that cannot change the number, such as
+  a Height drag, a title edit or a render-mode flip. Measured on the project venv a sunburst frame
+  costs ~6 ms at 2k rows and ~800 ms at 200k against a 2–16 ms key hash, so the win belongs to
+  uploaded CSVs rather than the samples. Deliberately **outside** `_CACHE_LAYER`: `_FORWARDED` is
+  derived from the three *builders*' shared keyword-only parameters, so it names `size_col`,
+  `goal_col`, `agg`, `dial` and the rest — kwargs `count_marks` does not take.
+- **Three AppTests pinning widget identity**, because nothing else would notice a `key=` being
+  deleted. Two assert that a selection survives a chart-type switch that changes only the label
+  (one for X, one for Y); the third asserts that a Dataset switch **reconciles** a stale Y instead
+  of landing on the empty-Y guard. All three were verified by breaking the code: reverting each fix
+  fails its own test on its own assertion, and mutation of the reconciliation reports `Y is []`.
+
+### Changed
+
+- **The gauge dial's two steppers moved from `st.columns(2)` to `st.container(horizontal=True)`.**
+  A plain two-widget row is neither a fixed grid nor a deliberate width ratio, which is what the
+  bundled reference reserves columns for — and it is already the pattern the KPI and badge rows
+  use. Verified by rendering: both steppers now sit at content width with their `-`/`+` controls
+  intact, where half a narrow sidebar had cramped them. The `st.columns([3, 2], gap="large")` in
+  the main panel is a genuine ratio and stays. Both inputs remain **keyless**: the comment above
+  them explains that a `key=` would make a stale dial permanent, and a layout change does not
+  touch that reasoning.
+
 ## [0.18.0] - 2026-08-20
 
 ### Changed

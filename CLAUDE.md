@@ -246,7 +246,8 @@ The project's dominant task, and the one that touches the most files. In order:
 5. **Sample**: add a dataset to `sample_data.py` leading with a category column, and a
    `_pick_*_sample` helper if the landing dataset can't drive it.
 6. **Wire**: add the selector in `streamlit_app.py` and any extra column widget, and
-   forward it through all three cache wrappers **by keyword, under its own name**. A new
+   forward it through all three **renderer** cache wrappers **by keyword, under its own
+   name** (and through `cached_count_marks` too, if `count_marks` reads it). A new
    kwarg also needs a row in the kwarg table above.
 7. **Test**: extend the three [sweeps](#test) rather than writing a per-type test, and
    **verify the new test by breaking the code**.
@@ -324,14 +325,28 @@ whenever someone remembers — prefer extending a sweep to writing a per-type te
 
 The app's **cache layer** is the part the ordinary AppTests barely reach, so it is pinned
 from **two** directions: **statically**, by two `ast` tests that read `streamlit_app.py` as
-source (every cached wrapper forwards each column/policy argument under its **own** name,
-and all three call sites pass them by keyword); and **dynamically**, by
+source (each of the three **renderer** wrappers in `_CACHE_LAYER` forwards every
+column/policy argument under its **own** name, and all three call sites pass them by
+keyword); and **dynamically**, by
 `test_app_static_png_mode_executes_the_cached_png_wrapper`, which selects Static PNG for
 real with `build_chart_png` monkeypatched to a recorder, so no export server is contacted.
 The set of arguments both layers check is **derived** from the three builders' signatures
 (`_forwarded_arguments`), not hand-listed, so a new kwarg is covered the day it is added.
+There is a **fourth** cached wrapper, `cached_count_marks`, deliberately outside `_CACHE_LAYER`:
+`_FORWARDED` is derived from the *builders*, so it names `size_col`/`goal_col`/`agg`/`dial` and
+the rest — kwargs `count_marks` does not take. It forwards the three columns it actually reads.
 Why static, and why that test clears the caches on the way *out*:
 [`docs/decisions.md`](docs/decisions.md#the-cache-layer-that-nothing-executed).
+
+**Widget identity** is pinned the same way, and for the same reason — nothing else would
+notice its removal. Streamlit folds every command kwarg into a *keyless* widget's element id,
+the **label included**, so the X and Y pickers (whose labels vary by chart type while their
+options do not) carry a `key=` and would silently reset without one. Three AppTests hold that
+down: two that a selection survives a label-only chart-type switch (X, and Y), and one that a
+Dataset switch **reconciles** a stale Y instead of landing on the empty-Y guard. Note the two
+widget families differ and the code differs with them — `selectbox` *resets* an invalid stored
+value on its own (so X needs no reconciliation), while `multiselect`/`pills` *filter* theirs to
+`[]` (so Y does). Verify any change here by breaking it; all three mutations are one-liners.
 
 ## Lint & format
 
