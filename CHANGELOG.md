@@ -38,7 +38,7 @@ Dates are the last commit at that version — the point it stopped being current
 **Studio Slate.** The chrome and typography of the bundled financial-dashboard template
 stay; its categorical scale does not. A template's palette is a chart palette only by
 accident, and this app is nothing but charts — so the scale is now searched against this
-codebase's own constraints, and four new guards keep it that way.
+codebase's own constraints, with a guard for every claim it makes.
 
 ### Added
 
