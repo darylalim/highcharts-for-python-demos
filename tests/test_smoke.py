@@ -102,6 +102,7 @@ Layers:
 
 import ast
 import inspect
+import itertools
 import math
 import re
 import sys
@@ -1075,6 +1076,279 @@ def test_no_series_colour_collides_with_the_chart_chrome():
     assert _SUNBURST_ROOT_COLOR not in _DARK_CHROME.values()
 
 
+def _linear_rgb(hex_color):
+    """A #rrggbb string as linear-light RGB in 0..1.
+
+    One implementation, because the file needs it three times (luminance, CIELAB, the CVD
+    matrices) and three copies would be three chances to diverge. The break point is the
+    sRGB spec's 0.04045; `_relative_luminance` above deliberately keeps WCAG 2.x's 0.03928
+    instead, which is the same curve with a rounding error the standard froze — left alone
+    there because that function exists to reproduce WCAG's arithmetic, not the spec's.
+    """
+    raw = hex_color.lstrip("#")
+    channels = [int(raw[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    return [
+        c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels
+    ]
+
+
+def _lab(hex_color):
+    """CIELAB (D65, 2°) of a #rrggbb string."""
+    r, g, b = _linear_rgb(hex_color)
+    x = r * 0.4124564 + g * 0.3575761 + b * 0.1804375
+    y = r * 0.2126729 + g * 0.7151522 + b * 0.0721750
+    z = r * 0.0193339 + g * 0.1191920 + b * 0.9503041
+
+    def f(t):
+        return t ** (1 / 3) if t > (6 / 29) ** 3 else t / (3 * (6 / 29) ** 2) + 4 / 29
+
+    fx, fy, fz = f(x / 0.95047), f(y / 1.0), f(z / 1.08883)
+    return 116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)
+
+
+def _ciede2000(c1, c2):
+    """CIEDE2000 colour difference. ~2.3 is one just-noticeable difference."""
+    l1, a1, b1 = _lab(c1)
+    l2, a2, b2 = _lab(c2)
+    cb = (math.hypot(a1, b1) + math.hypot(a2, b2)) / 2
+    g = 0.5 * (1 - math.sqrt(cb**7 / (cb**7 + 25**7)))
+    a1p, a2p = (1 + g) * a1, (1 + g) * a2
+    c1p, c2p = math.hypot(a1p, b1), math.hypot(a2p, b2)
+    h1p = math.degrees(math.atan2(b1, a1p)) % 360 if (a1p or b1) else 0
+    h2p = math.degrees(math.atan2(b2, a2p)) % 360 if (a2p or b2) else 0
+    dlp, dcp = l2 - l1, c2p - c1p
+    if c1p * c2p == 0:
+        dhp = 0.0
+    elif abs(h2p - h1p) <= 180:
+        dhp = h2p - h1p
+    else:
+        dhp = h2p - h1p - 360 if h2p - h1p > 180 else h2p - h1p + 360
+    dhp = 2 * math.sqrt(c1p * c2p) * math.sin(math.radians(dhp) / 2)
+    lbp, cbp = (l1 + l2) / 2, (c1p + c2p) / 2
+    if c1p * c2p == 0:
+        hbp = h1p + h2p
+    elif abs(h1p - h2p) <= 180:
+        hbp = (h1p + h2p) / 2
+    else:
+        hbp = (h1p + h2p + 360) / 2 if h1p + h2p < 360 else (h1p + h2p - 360) / 2
+    t = (
+        1
+        - 0.17 * math.cos(math.radians(hbp - 30))
+        + 0.24 * math.cos(math.radians(2 * hbp))
+        + 0.32 * math.cos(math.radians(3 * hbp + 6))
+        - 0.20 * math.cos(math.radians(4 * hbp - 63))
+    )
+    sl = 1 + (0.015 * (lbp - 50) ** 2) / math.sqrt(20 + (lbp - 50) ** 2)
+    sc, sh = 1 + 0.045 * cbp, 1 + 0.015 * cbp * t
+    rt = -math.sin(math.radians(60 * math.exp(-(((hbp - 275) / 25) ** 2)))) * (
+        2 * math.sqrt(cbp**7 / (cbp**7 + 25**7))
+    )
+    return math.sqrt(
+        (dlp / sl) ** 2
+        + (dcp / sc) ** 2
+        + (dhp / sh) ** 2
+        + rt * (dcp / sc) * (dhp / sh)
+    )
+
+
+# Machado, Oliveira & Fernandes (2009), severity 1.0 — the standard simulation matrices.
+_CVD_MATRICES = {
+    "deuteranopia": (
+        (0.367322, 0.860646, -0.227968),
+        (0.280085, 0.672501, 0.047413),
+        (-0.011820, 0.042940, 0.968881),
+    ),
+    "protanopia": (
+        (0.152286, 1.052583, -0.204868),
+        (0.114503, 0.786281, 0.099216),
+        (-0.003882, -0.048116, 1.051998),
+    ),
+    "tritanopia": (
+        (1.255528, -0.076749, -0.178779),
+        (-0.078411, 0.930809, 0.147602),
+        (0.004733, 0.691367, 0.303900),
+    ),
+}
+
+
+def _simulate_cvd(hex_color, kind):
+    """The given colour as a dichromat sees it, back as a #rrggbb string."""
+    lin = _linear_rgb(hex_color)
+    out = []
+    for row in _CVD_MATRICES[kind]:
+        v = max(0.0, min(1.0, sum(m * c for m, c in zip(row, lin, strict=True))))
+        v = 12.92 * v if v <= 0.0031308 else 1.055 * v ** (1 / 2.4) - 0.055
+        out.append(round(max(0.0, min(1.0, v)) * 255))
+    return "#" + "".join(f"{c:02x}" for c in out)
+
+
+def _worst_across_vision(a, b):
+    """The smallest CIEDE2000 between two colours across normal vision and all three
+    dichromacies — i.e. how alike they get for the viewer they are most alike for."""
+    return min(
+        [_ciede2000(a, b)]
+        + [_ciede2000(_simulate_cvd(a, k), _simulate_cvd(b, k)) for k in _CVD_MATRICES]
+    )
+
+
+# Three floors, and they differ because the CONSEQUENCES differ, not because the numbers
+# drifted apart. Stated together so the file has one answer to "what does this codebase
+# mean by confusable".
+#
+#   * MIN_SERIES_SEPARATION — two arbitrary series merging costs a reading of which line is
+#     which. Deliberately the most forgiving, so a defensible future palette is not failed
+#     for being a couple of points tighter than this one.
+#   * MIN_SEMANTIC_SEPARATION — the rise/fall pair only. Confusing a gain with a loss is not
+#     an ugly chart, it is a WRONG one. It is also the most expensive pair to separate (see
+#     config.toml: lightness is the only channel available and the sRGB gamut caps it),
+#     which is why it needs saying out loud rather than being left to the general floor.
+#   * MIN_MARK_VS_FURNITURE_SEPARATION — a mark against chrome, or against an off-palette
+#     "not a category" neutral. Higher than the series floor because these are not peers: a
+#     series that reads as the axis labels, or a sunburst root that reads as one of its own
+#     children, INVERTS a meaning rather than blurring one.
+MIN_SERIES_SEPARATION = 8.0
+MIN_SEMANTIC_SEPARATION = 13.0
+MIN_MARK_VS_FURNITURE_SEPARATION = 9.0
+# The ramp's cold end against the empty-cell fill. Same family as the three above and named
+# for the same reason: 8.7 was the measured defect, so a floor of 12 is the smallest round
+# number that is unambiguously clear of it.
+MIN_RAMP_VS_NULL_SEPARATION = 12.0
+
+
+def test_no_palette_pair_collapses_under_colour_vision_deficiency():
+    """Every pair of series hues must stay distinguishable, colour vision or not.
+
+    The guard that was missing, and the one the identity check above cannot express.
+    `test_no_series_colour_collides_with_the_chart_chrome` asks whether two roles are the
+    same STRING; this asks whether two series are the same COLOUR to a viewer, which is a
+    different question and had no second home at all.
+
+    It is not hypothetical. The financial-dashboard template this app shipped put `#60a5fa`
+    at index 0 and `#a78bfa` at index 2 — 33 CIEDE2000 apart in normal vision, and **0.31**
+    apart under deuteranopia, i.e. literally one colour for roughly 6% of men, at the two
+    slots a three-series chart fills first. Every existing assertion passed: the hexes
+    differed, none was a chrome value, all cleared contrast against the background. Nothing
+    in the suite could see it, and it shipped.
+
+    ALL pairs, not adjacent ones. Of the 29 supported types, treemap, sunburst,
+    networkgraph, scatter and bubble place marks by DATA, so no ordering of the palette can
+    keep a given pair apart on screen — index 0 and index 6 can land side by side.
+    Adjacency is not a defence. (Heatmap is deliberately NOT in that list: it colours by
+    `colorAxis` and never renders a categorical hue at all.)
+    """
+    for i, j in itertools.combinations(range(len(DEFAULT_COLORS)), 2):
+        delta = _worst_across_vision(DEFAULT_COLORS[i], DEFAULT_COLORS[j])
+        assert delta >= MIN_SERIES_SEPARATION, (
+            f"DEFAULT_COLORS[{i}] {DEFAULT_COLORS[i]} and [{j}] {DEFAULT_COLORS[j]} come "
+            f"within {delta:.2f} for some viewer (floor {MIN_SERIES_SEPARATION}) — they "
+            f"read as one series"
+        )
+        # ...and in ordinary vision the bar is higher, because nothing is collapsing it.
+        # This is what stops a "fix" that spaces the palette for dichromats by muddying it
+        # for everyone else.
+        plain = _ciede2000(DEFAULT_COLORS[i], DEFAULT_COLORS[j])
+        assert plain >= 15.0, (
+            f"DEFAULT_COLORS[{i}] {DEFAULT_COLORS[i]} and [{j}] {DEFAULT_COLORS[j]} are "
+            f"only {plain:.2f} apart in normal vision"
+        )
+
+
+def test_the_rise_and_the_fall_stay_distinct_for_a_dichromat():
+    """The one pair whose confusion produces a wrong reading rather than an ugly one.
+
+    `_WATERFALL_UP_COLOR` and `_WATERFALL_DOWN_COLOR` are read by INDEX, so they carry a
+    meaning no legend restates: green is a gain, red is a loss. Under deuteranopia both
+    simulate to yellows and hue stops separating them at all — the template's pair came to
+    **9.89**, which is why an unlabelled waterfall was genuinely ambiguous. Only lightness
+    is left, and the sRGB gamut caps how far it goes: a saturated red clearing 4.5:1 exists
+    only between L* 57 and 68 while a saturated green reaches 84. This pair is bought at a
+    price, so it is asserted rather than left to the general floor — which it would pass
+    while still being the weakest pair in the palette.
+    """
+    from highcharts_builder import _WATERFALL_DOWN_COLOR, _WATERFALL_UP_COLOR
+
+    delta = _worst_across_vision(_WATERFALL_UP_COLOR, _WATERFALL_DOWN_COLOR)
+    assert delta >= MIN_SEMANTIC_SEPARATION, (
+        f"a rise ({_WATERFALL_UP_COLOR}) and a fall ({_WATERFALL_DOWN_COLOR}) come within "
+        f"{delta:.2f} for some viewer (floor {MIN_SEMANTIC_SEPARATION})"
+    )
+
+
+def test_no_mark_reads_as_chart_furniture_for_a_dichromat():
+    """A series must not become the axis labels, nor a neutral become a category.
+
+    This is where the incident that started all of this actually lived, and the pairwise
+    guard above cannot reach it: that one sweeps palette against palette, while the 1.00:1
+    grey collision was a series against `grayColor`. Fixing that by identity left the
+    channel unguarded, and it recurred immediately — the first Studio Slate palette put
+    `DEFAULT_COLORS[6]` **6.24** from `_DARK_CHROME["muted"]` under deuteranopia, which is
+    the same defect at a lower severity, with the suite green.
+
+    The off-palette marks are here for the mirror reason. `_SUNBURST_ROOT_COLOR` means
+    "this sector is not a category", and a sunburst draws it ringed by palette-coloured
+    children — so a collapse there does not blur a reading, it INVERTS one. Its aliases
+    (`_DUMBBELL_BEFORE_COLOR`, `_NEEDLE_PIVOT_COLOR`) sit beside palette marks by
+    construction too.
+
+    `bg` is excluded: a mark is SUPPOSED to differ from the background, and that is already
+    pinned as a contrast ratio, which is the right measure for a figure/ground pair.
+    """
+    from highcharts_builder import _DARK_CHROME, _SUNBURST_ROOT_COLOR
+
+    furniture = {
+        f"_DARK_CHROME[{k!r}]": v for k, v in _DARK_CHROME.items() if k != "bg"
+    }
+    furniture["_SUNBURST_ROOT_COLOR"] = _SUNBURST_ROOT_COLOR
+    for name, colour in furniture.items():
+        for i, series in enumerate(DEFAULT_COLORS):
+            delta = _worst_across_vision(colour, series)
+            assert delta >= MIN_MARK_VS_FURNITURE_SEPARATION, (
+                f"{name} ({colour}) and DEFAULT_COLORS[{i}] ({series}) come within "
+                f"{delta:.2f} for some viewer "
+                f"(floor {MIN_MARK_VS_FURNITURE_SEPARATION})"
+            )
+
+
+def test_every_series_colour_takes_black_in_mark_labels():
+    """Pin the one measurement the palette comment itself calls silent.
+
+    Highcharts' `contrast` keyword picks the ink for in-mark value labels on pie, treemap,
+    heatmap and waterfall by a YIQ threshold of 128000 — a rule settled by RENDERING (the
+    fill read back off the DOM), because two published accounts of it disagree. Inside the
+    contrast band this palette lives in, the choice is not cosmetic: the dimmest permitted
+    fill takes BLACK ink at 4.5:1 but WHITE ink at only 3.96:1, so a hue that slips under
+    the threshold loses AA on the number printed inside the mark, with nothing else in the
+    suite reacting. The fall red clears it by under 4%, which is the whole reason this is
+    asserted rather than trusted.
+    """
+    for i, colour in enumerate(DEFAULT_COLORS):
+        raw = colour.lstrip("#")
+        r, g, b = (int(raw[k : k + 2], 16) for k in (0, 2, 4))
+        assert r * 299 + g * 587 + b * 114 > 128000, (
+            f"DEFAULT_COLORS[{i}] {colour} falls under Highcharts' contrast threshold, so "
+            f"its in-mark labels flip to white ink at sub-AA contrast"
+        )
+
+
+def test_heatmap_low_end_is_distinguishable_from_an_empty_cell():
+    """A missing cell must not read as a cold one — the claim _HEATMAP_NULL is chosen ON.
+
+    `_HEATMAP_NULL`'s comment argues an empty cell takes the gridline slate rather than a
+    pale ramp colour "so a missing reading reads as 'no cell here' ... instead of as a low
+    value on the ramp". That is an argument about a colour DIFFERENCE, and it was never
+    measured: with the ramp's cold end at `#0c4a6e` the two were 8.7 apart, close enough to
+    confuse, so the comment described an intent the code did not achieve. Asserting it here
+    is what makes the rationale true rather than aspirational.
+    """
+    from highcharts_builder import _HEATMAP_GRADIENT, _HEATMAP_NULL
+
+    delta = _ciede2000(_HEATMAP_GRADIENT["minColor"], _HEATMAP_NULL)
+    assert delta >= MIN_RAMP_VS_NULL_SEPARATION, (
+        f"the ramp's cold end {_HEATMAP_GRADIENT['minColor']} is only {delta:.2f} from the "
+        f"empty-cell fill {_HEATMAP_NULL}; a missing reading will read as a low value"
+    )
+
+
 def _config_theme():
     """The `[theme]` table of .streamlit/config.toml, hex values case-normalized.
 
@@ -1181,6 +1455,59 @@ def test_theme_colors_stay_in_sync_with_config():
     assert sequential.index(_HEATMAP_GRADIENT["minColor"]) < sequential.index(
         _HEATMAP_GRADIENT["maxColor"]
     )
+
+
+def test_semantic_text_tokens_are_legible_on_both_surfaces():
+    """Why the shell's green/red are NOT the chart's rise/fall any more.
+
+    They used to be the same two hexes: `greenColor`/`redColor` were
+    `chartCategoricalColors[1]`/`[3]` verbatim, i.e. `_WATERFALL_UP_COLOR` and
+    `_WATERFALL_DOWN_COLOR`. They diverged when the categorical scale was redesigned for
+    MARKS and `secondaryBackgroundColor` was lifted off the page, and the reason is a
+    constraint rather than an oversight: these are TEXT — `st.metric` deltas,
+    `:red[...]`/`:green[...]` markdown, badges — so they owe 4.5:1 on the page AND on the
+    widget surface, which the louder members of a mark palette do not clear.
+
+    Pinned because "one concept, two inks" is otherwise an unexplained inconsistency that a
+    future editor would helpfully re-unify, breaking AA on every bordered container at
+    once. If the two are ever reconciled, it has to be by moving the TEXT tokens to hues
+    that pass here, not by pointing them at the mark palette.
+    """
+    theme = _config_theme()
+    page, surface = theme["backgroundColor"], theme["secondaryBackgroundColor"]
+    for key in (
+        "greenColor",
+        "redColor",
+        "yellowColor",
+        "orangeColor",
+        "blueColor",
+        "violetColor",
+        "grayColor",
+    ):
+        for name, ground in (("page", page), ("widget surface", surface)):
+            ratio = _contrast_ratio(theme[key], ground)
+            assert ratio >= 4.5, (
+                f"{key} {theme[key]} is {ratio:.2f}:1 on the {name} ({ground}); it is text "
+                f"and needs 4.5:1"
+            )
+
+
+def test_the_widget_surface_is_one_value_everywhere_it_appears():
+    """`secondaryBackgroundColor` is hand-copied three times; nothing else notices a drift.
+
+    The main table, `[theme.sidebar]`, and `dataframeHeaderBackgroundColor` all have to be
+    the same surface or the app grows two subtly different "one step up from the page"
+    greys — the kind of difference nobody sees in isolation and everybody feels side by
+    side. `test_theme_colors_stay_in_sync_with_config` guards the chart-facing values only,
+    so this one is shell-facing and had no home.
+    """
+    theme = _config_theme()
+    surface = theme["secondaryBackgroundColor"]
+    assert theme["dataframeHeaderBackgroundColor"] == surface
+    assert theme["sidebar"]["secondaryBackgroundColor"] == surface
+    # ...and it must remain a real step off the page, which is the whole reason it moved.
+    # 1.22:1 (the template's) is below a legible card boundary; this keeps it above 1.3.
+    assert _contrast_ratio(surface, theme["backgroundColor"]) >= 1.3
 
 
 # --------------------------------------------------------------------------- #
@@ -1556,7 +1883,7 @@ def test_heatmap_dark_mode_themes_the_color_axis():
     df = pd.DataFrame({"day": ["Mon", "Tue"], "AM": [1.0, 2.0]})
     opts = build_options(df, "heatmap", "day", ["AM"])
     assert opts["chart"]["backgroundColor"] == "#0f172a"
-    assert opts["colorAxis"]["minColor"] == "#0c4a6e"
+    assert opts["colorAxis"]["minColor"] == "#075985"
     assert opts["colorAxis"]["maxColor"] == "#7dd3fc"
     assert opts["colorAxis"]["labels"]["style"]["color"] == "#94a3b8"
     # The gradient legend's tick lines (full-width gridlines + the shorter edge ticks)

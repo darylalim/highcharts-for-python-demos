@@ -33,6 +33,80 @@ worth stating rather than tidying away:
 
 Dates are the last commit at that version — the point it stopped being current.
 
+## [0.19.0] - 2026-09-08
+
+**Studio Slate.** The chrome and typography of the bundled financial-dashboard template
+stay; its categorical scale does not. A template's palette is a chart palette only by
+accident, and this app is nothing but charts — so the scale is now searched against this
+codebase's own constraints, and four new guards keep it that way.
+
+### Added
+
+- **`test_no_palette_pair_collapses_under_colour_vision_deficiency`** — the guard that was
+  missing. `test_no_series_colour_collides_with_the_chart_chrome` asks whether two roles
+  are the same *string*; this asks whether two series are the same *colour to a viewer*,
+  over all pairs under each of the three dichromacies. Of the 29 types, treemap, sunburst,
+  networkgraph, scatter and bubble place marks by data, so no palette ordering can keep a
+  given pair apart on screen — adjacency is not a defence.
+- **`test_no_mark_reads_as_chart_furniture_for_a_dichromat`** — because the pairwise guard
+  above sweeps palette against palette, and the incident that started this was a series
+  against `grayColor`. It covers every chrome slot and `_SUNBURST_ROOT_COLOR`, which a
+  sunburst draws ringed by palette-coloured children: a collapse there does not blur a
+  reading, it inverts one.
+- **`test_the_rise_and_the_fall_stay_distinct_for_a_dichromat`** — the one pair whose
+  confusion produces a *wrong* reading rather than an ugly one, held to a higher floor
+  than the rest and asserted separately because it is also the most expensive to separate.
+- **`test_every_series_colour_takes_black_in_mark_labels`**,
+  **`test_heatmap_low_end_is_distinguishable_from_an_empty_cell`**,
+  **`test_semantic_text_tokens_are_legible_on_both_surfaces`** and
+  **`test_the_widget_surface_is_one_value_everywhere_it_appears`** — four claims that were
+  argued in prose and measured nowhere.
+
+### Changed
+
+- **`chartCategoricalColors` / `DEFAULT_COLORS` is a designed scale, not an inherited
+  one.** The template shipped the Tailwind **-400 step of eight hues**: every entry at
+  L\* 64-81, so **hue was the only channel carrying series identity**. Measured in
+  CIEDE2000 with dichromacy simulated (Machado-Oliveira-Fernandes 2009), four of its 28
+  pairs sat below ΔE 20 in normal vision — blue/sky **11.7**, red/pink 18.6, yellow/orange
+  18.9, blue/violet 19.3 — and six below ΔE 12 under deuteranopia, where `#60a5fa` and
+  `#a78bfa` came out **0.31 apart**: one colour, for roughly 6% of men, at slots 0 and 2,
+  which is exactly where a three-series chart puts them. Worst pair is now **19.8** normal,
+  **9.3** deuteranopia, **9.6** protanopia, **9.5** tritanopia, with nothing in the scale
+  within ΔE 9.28 of a chrome value and the rise/fall pair specifically at **14.65** (from
+  9.89). Index 0 is deliberately unchanged — it is the single-series default,
+  `_WATERFALL_SUM_COLOR`, bullet's bar, dumbbell's after-state and Streamlit's accent, and
+  freeing it was measured at ~1.1 ΔE for a dimmer primary, then declined.
+- **`secondaryBackgroundColor` is a surface again**, `#1e293b` → `#243146`. The old value
+  was **1.22:1** against the page — below any legible card boundary, in an app that is
+  mostly controls. Now 1.36:1, chosen against the semantic *text* tokens rather than
+  against the page alone, so every one of them still clears 4.5:1 on it. The gain is the
+  fill step, not the outline: `borderColor` loses a little against the lighter surface
+  (1.41:1 → 1.27:1), and raising it is not free because it is also the chart gridline.
+- **Sky left the categorical scale.** `#38bdf8` was simultaneously
+  `chartCategoricalColors[5]` **and** `chartSequentialColors[5]` — a categorical *identity*
+  and a heatmap *value* painted the same hex. A cyan takes the slot; the ramp keeps its hue.
+- **The shell's gain/loss ink and the chart's rise/fall marks are no longer the same
+  hexes.** They were, and the split is deliberate: `greenColor`/`redColor` are *text*, so
+  they owe 4.5:1 on the page and on the widget surface, which the louder members of a mark
+  palette do not clear. Now pinned in that direction, so a future re-unification has to
+  move the text tokens rather than point them at the marks.
+
+### Fixed
+
+- **A missing heatmap cell read as a cold one.** `_HEATMAP_NULL`'s comment argues an empty
+  cell takes the gridline slate "so a missing reading reads as 'no cell here' … instead of
+  as a low value on the ramp" — but the ramp's cold end and the null fill were ΔE **8.7**
+  apart, close enough to confuse, so the rationale was not true of the code it described.
+  `_HEATMAP_GRADIENT["minColor"]` moves one stop up the sequential scale
+  (`#0c4a6e` → `#075985`), putting them at 12.5. It costs the ramp about 16% of its span,
+  which is the honest price of separating a value channel from a fill that carries no value.
+- **Two comment blocks in `highcharts_builder.py` still described the two-mode world
+  removed in 0.18.0** — a "light ramp" anchored on the brand primary, a `_themed` flip of
+  `_HEATMAP_NULL` that never happens, and a warning against de-duplicating two constants
+  that have not been equal since one was re-aliased. Both are the prose sweep that a
+  palette change is supposed to trigger, run one block short.
+
 ## [0.18.1] - 2026-08-22
 
 An audit of `streamlit_app.py` against the reference docs bundled inside Streamlit's own

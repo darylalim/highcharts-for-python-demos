@@ -22,7 +22,7 @@ entry exists because a rule elsewhere looks arbitrary without it.
 [The bullet goal that must be `None`](#the-bullet-goal-that-must-be-none) ·
 [Row-less frames: three ways a non-boolean mask breaks](#row-less-frames-three-ways-a-non-boolean-mask-breaks) ·
 [`color-scheme`: why the pin sits on the SVG](#color-scheme-why-the-pin-sits-on-the-svg) ·
-[Palette: the one deviation, and the second-mode smell](#palette-the-one-deviation-and-the-second-mode-smell)
+[Palette: the scale that was a palette by accident](#palette-the-scale-that-was-a-palette-by-accident)
 
 ## Packaging: the fact with no second home
 
@@ -245,17 +245,80 @@ single source of truth for dark mode.
 The general rule that falls out: anything a new chart type wants themed must go through
 `build_options`, never through a Highcharts default.
 
-## Palette: the one deviation, and the second-mode smell
+## Palette: the scale that was a palette by accident
 
 `DEFAULT_COLORS` **is** `.streamlit/config.toml`'s `chartCategoricalColors`, copied by
 hand because no theme CSS reaches an iframe or a server-side PNG.
 
-Exactly **one** entry deviates from the upstream template: index 6 is pink, not the
-template's gray. That gray is also the template's `grayColor`, and therefore
-`_DARK_CHROME["muted"]` — so series 7 was being drawn in the axis-label colour at a
-contrast ratio of **1.00:1**, i.e. invisible against the labels it sat among.
-`test_no_series_colour_collides_with_the_chart_chrome` is the guard that keeps any future
-theme from walking a chrome value back into the categorical scale.
+**The first incident, and the guard it left.** The bundled financial-dashboard template
+set `grayColor` and `chartCategoricalColors[6]` to the same `#94a3b8`, and
+`_DARK_CHROME["muted"]` copies `grayColor` — so a seven-series chart drew its seventh
+series in exactly the axis-label colour, at **1.00:1**. The fix was one entry (pink at
+index 6, the template's one deviation), but the durable part was
+`test_no_series_colour_collides_with_the_chart_chrome`, which asserts *identity* rather
+than a contrast floor: a series and a gridline may legitimately sit close, but being the
+same string is never a design call.
+
+**The second incident, which that guard could not see.** The rest of the template's scale
+stayed. It was the Tailwind **-400 step of eight hues** — harmonious, and a chart palette
+only by accident. Every entry sat at L\* 64-81, a 17-point band, so **hue was the only
+channel carrying series identity**; when hue collapses, nothing is left. Measured in
+CIEDE2000 with dichromacy simulated (Machado-Oliveira-Fernandes 2009, severity 1.0), four
+of its 28 pairs fell below ΔE 20 in normal vision — blue/sky **11.7**, red/pink 18.6,
+yellow/orange 18.9, blue/violet 19.3 — and six below ΔE 12 under deuteranopia, where
+`#60a5fa` and `#a78bfa` came out **0.31 apart**: one colour, for roughly 6% of men, at
+slots 0 and 2, which is where a three-series chart puts them.
+
+Every assertion in the suite passed. The hexes differed, none was a chrome value, all
+cleared contrast against the background. The identity guard asks whether two roles are
+the same *string*; this asks whether two series are the same *colour to a viewer*, and
+that question had no second home at all. It does now:
+`test_no_palette_pair_collapses_under_colour_vision_deficiency`, over **all** pairs rather
+than adjacent ones — of 29 types, treemap, sunburst, networkgraph, scatter and bubble
+place marks by data, so no ordering can keep a given pair apart on screen. (Heatmap is
+*not* one of them, though an earlier draft of this sentence said so: it colours by
+`colorAxis` and never renders a categorical hue at all.)
+
+**What replaced it.** A scale searched under this codebase's own constraints rather than
+chosen by eye — because eye is exactly what fails here: every hand-assembled candidate
+tried, including one built entirely from recognisable Tailwind steps, scored **worse than
+3.0** on the same measure. Trichromatic intuition cannot see the failure mode.
+
+Three findings are worth keeping whichever palette ships next:
+
+- **Slot 0 stays.** It is the most-loaded value in the module — the single-series default,
+  `_WATERFALL_SUM_COLOR`, bullet's bar, dumbbell's after-state — and Streamlit's accent
+  besides. Freeing it was measured at ~1.1 ΔE of extra separation for a dimmer primary,
+  and declined. A palette optimiser told to maximise the worst *pair* will happily pay for
+  it by dimming the one value that appears in more charts than the other seven combined.
+- **The rise/fall split has only one direction.** Under deuteranopia a green and a red both
+  simulate to yellows, so hue cannot separate them and lightness must. The obvious
+  aesthetic objection — that on a finance-adjacent tool a loss should not whisper while a
+  gain shouts — is *unbuildable*: in sRGB a saturated red that still clears 4.5:1 exists
+  only between L\* 57 and 68, while a saturated green reaches 84. A fall cannot be made the
+  lighter mark without ceasing to read as red. It buys prominence with **chroma** instead.
+- **Sky was doing two jobs.** `#38bdf8` was simultaneously `chartCategoricalColors[5]` and
+  `chartSequentialColors[5]` — a categorical *identity* and a heatmap *value* painted the
+  same hex. Cyan took the slot; the ramp got its hue back.
+
+**A rationale that was not true of its code.** `_HEATMAP_NULL`'s comment argues an empty
+cell takes the gridline slate "so a missing reading reads as 'no cell here' … instead of
+as a low value on the ramp". That is a claim about a colour *difference*, and it was never
+measured: the ramp's cold end and the null fill were ΔE **8.7** apart, inside the
+confusable band. Moving the cold end one stop up the sequential scale
+(`#0c4a6e` → `#075985`) puts them at 12.5, and
+`test_heatmap_low_end_is_distinguishable_from_an_empty_cell` now asserts it. The general
+lesson is the useful one: **a comment that argues from a colour difference should be
+pinned by that difference**, or it decays into an intention.
+
+**Verified by rendering, twice, on questions arithmetic could not settle.** Highcharts'
+`contrast` keyword picks the ink for in-mark labels on pie, treemap, heatmap and waterfall
+by a YIQ threshold — and two careful analyses of the same rule reached *opposite*
+conclusions about which ink the palette gets. Drawing eight tiles and asking the DOM what
+colour it painted the text settled it in one call: black, on all eight, on both the old
+palette and the new. Within the 4.5-12:1 contrast band this is not cosmetic — the dimmest
+permitted fill takes black ink at 4.5:1 but **white** ink at only 3.96:1, so a slot that
+slips under the threshold loses AA silently.
 
 **The second-mode smell.** A constant that is written at build time and then overwritten
 by `_themed` is evidence that a second mode is still hiding in the code.
