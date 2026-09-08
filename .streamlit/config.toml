@@ -1,6 +1,6 @@
-# Project-level Streamlit theme: the bundled "financial-dashboard" template
-# (streamlit/.agents/skills/developing-with-streamlit/assets/templates/themes/configs/),
-# hex lowercased to match the builder's convention.
+# Project-level Streamlit theme: "Studio Slate" — the bundled financial-dashboard
+# template's chrome, kept, with a categorical scale designed for this app rather than
+# borrowed. Hex lowercased to match the builder's convention.
 #
 # It is a SINGLE [theme] table, and that is the point: defining both [theme.light]
 # and [theme.dark] is what unlocks the light/dark toggle in the app's settings menu,
@@ -18,16 +18,23 @@
 # reach them — not even chartCategoricalColors, which Streamlit applies only to its own
 # Vega/Plotly charts. The charts mirror this theme by hand in highcharts_builder:
 # DEFAULT_COLORS == chartCategoricalColors below, _DARK_CHROME's bg/text/muted/grid ==
-# backgroundColor/textColor/grayColor/borderColor, and _HEATMAP_GRADIENT_DARK is drawn
-# from chartSequentialColors. That duplication is guarded mechanically by
+# backgroundColor/textColor/grayColor/borderColor, and _HEATMAP_GRADIENT's two endpoints
+# are drawn from chartSequentialColors. That duplication is guarded mechanically by
 # tests/test_smoke.py::test_theme_colors_stay_in_sync_with_config, so editing one side
 # alone fails the suite rather than drifting quietly.
 [theme]
 base = "dark"
-primaryColor = "#60a5fa"             # bright blue for dark mode
+primaryColor = "#60a5fa"             # bright blue for dark mode (== chartCategoricalColors[0])
 backgroundColor = "#0f172a"          # deep slate
-secondaryBackgroundColor = "#1e293b" # slightly lighter slate
-codeBackgroundColor = "#1e293b"
+# A REAL surface step, not a tint. The template shipped #1e293b here, which is 1.22:1
+# against the page — below any legible card boundary, in an app that is mostly controls
+# (14 selectboxes, pills, a multiselect, a file uploader, a dataframe, four metrics). This
+# is 1.36:1: still quiet, but the wells and bordered containers now have an edge. It is a
+# genuine interpolation on the Tailwind slate line, not a guess, and it was chosen against
+# the SEMANTIC text tokens below rather than against the page alone — every one of them
+# still clears 4.5:1 ON this surface, which is the check a brighter step would fail.
+secondaryBackgroundColor = "#243146"
+codeBackgroundColor = "#1e293b"      # code wells stay the darker step: they carry no text tokens
 textColor = "#f1f5f9"                # light text
 linkColor = "#60a5fa"
 borderColor = "#334155"
@@ -50,7 +57,11 @@ headingFontSizes = ["28px", "22px", "18px", "16px", "14px", "12px"]
 headingFontWeights = [700, 600, 600, 600, 500, 500]
 linkUnderline = false
 
-# Semantic colors for financial indicators
+# Semantic colors for financial indicators. These are TEXT tokens — st.metric deltas,
+# :red[…]/:green[…] markdown, badges — and are deliberately NOT the categorical scale
+# below, which paints marks. Different jobs, different constraints: a text token has to
+# clear 4.5:1 on the page AND on secondaryBackgroundColor, which the mark palette's
+# louder members do not. Left at the template's values, which pass both.
 greenColor = "#34d399"  # positive/gains - bright green
 redColor = "#f87171"    # negative/losses - bright red
 yellowColor = "#fbbf24" # warnings/caution
@@ -61,32 +72,59 @@ grayColor = "#94a3b8"   # neutral/secondary text (== _DARK_CHROME["muted"])
 
 # Chart colors. Streamlit applies these to its OWN charts only; this app renders every
 # chart with Highcharts, which mirrors this list as highcharts_builder.DEFAULT_COLORS.
-# The ORDER is load-bearing there: index 0 is the brand primary (waterfall's closing
-# total, the heatmap ramp's high end, bullet's bar), 1 is the green a waterfall rise
-# takes, and 3 is the red a fall and a boxplot outlier take. Reordering repaints those
-# meanings.
 #
-# ONE DELIBERATE DEVIATION from the upstream template: index 6 is pink-400 (#f472b6),
-# not the template's gray #94a3b8. The template sets grayColor to that same gray, and
-# _DARK_CHROME["muted"] copies grayColor for axis labels, legend hover and axis titles —
-# so a 7-series chart drew its 7th series in exactly the axis-label colour, a 1.00:1
-# collision. The gray had to leave the *categorical* scale rather than the chrome,
-# because chrome is what the shell and the chart must agree on. Pink also restores the
-# hue this palette's predecessor carried at index 6. Guarded by
-# test_no_series_colour_collides_with_the_chart_chrome.
+# The ORDER is load-bearing there: index 0 is the brand primary (waterfall's closing
+# total, bullet's bar, a dumbbell's after-state), 1 is the green a waterfall rise takes,
+# and 3 is the red a fall and a boxplot outlier take. Reordering repaints those meanings.
+#
+# This scale is DESIGNED, not borrowed, and that is the whole change. The upstream
+# template's was the Tailwind -400 step of eight hues: harmonious, and a chart palette
+# only by accident. Every entry sat at L* 64-81, so HUE was the only channel carrying
+# series identity — and when hue collapses, nothing was left. Measured (CIEDE2000, with
+# dichromacy simulated by Machado-Oliveira-Fernandes 2009 at severity 1.0), four of its
+# 28 pairs fell below dE 20 in NORMAL vision (blue/sky 11.7, red/pink 18.6,
+# yellow/orange 18.9, blue/violet 19.3) and six below dE 12 under deuteranopia — where
+# blue #60a5fa and violet #a78bfa came out **0.3 apart**, i.e. the same colour for the
+# ~6% of men who are deuteranopic, at slots 0 and 2 where a three-series chart puts them.
+# Eight slots, about five identities.
+#
+# What replaced it, and the rules it was searched under (they are the design):
+#   * Slot 0 is UNCHANGED. It is the most-loaded value in the system — the single-series
+#     default, the waterfall total, the bullet bar, the dumbbell's after-marker, every
+#     Streamlit accent — so it stays the brand blue AND stays bright (7.02:1). Freeing it
+#     buys ~1.1 dE of separation and costs a dimmer primary; that trade was declined.
+#   * The rise (1) and the fall (3) are split by ~19 L* points. Under deuteranopia green
+#     and red both simulate to yellows, so HUE cannot separate them and lightness is the
+#     only channel left: the pair goes from dE 9.9 to 24.6. The split runs rise-bright,
+#     and only that way — a saturated red that clears 4.5:1 exists only between L* 57 and
+#     68, while a saturated green reaches L* 84, so a fall CANNOT be made the lighter mark
+#     without ceasing to be red. The fall buys its prominence with CHROMA (73) instead.
+#   * Sky is gone. #38bdf8 was simultaneously chartCategoricalColors[5] and
+#     chartSequentialColors[5] — a categorical IDENTITY and a heatmap VALUE painted the
+#     same hex. Cyan takes the slot and the sequential ramp gets its hue back.
+#   * Every entry sits in a 2.06x prominence band (5.34-10.99:1). A wider spread buys
+#     more separation but imposes an ordinal rank on data that has none.
+#   * Every entry stays above YIQ 128000, so Highcharts' `contrast` keyword resolves the
+#     in-mark labels on pie/treemap/heatmap/waterfall to BLACK on all eight. Verified by
+#     reading the rendered DOM, not from the arithmetic — the two published accounts of
+#     that threshold disagree.
+# Result: worst pair 19.4 normal, 10.1 deuteranopia, 9.6 protanopia, 10.3 tritanopia.
+# The lilac at index 2 is deliberately the palest thing here: a SATURATED violet is
+# exactly what collides with a locked mid-blue under protanopia, so its low chroma is the
+# price of not re-committing the bug this palette exists to fix.
 chartCategoricalColors = [
     "#60a5fa",
-    "#34d399",
-    "#a78bfa",
-    "#f87171",
-    "#fbbf24",
-    "#38bdf8",
-    "#f472b6",
-    "#fb923c",
+    "#99d480",
+    "#f4b6f8",
+    "#ff4c69",
+    "#fcc017",
+    "#55d2c6",
+    "#d363bc",
+    "#e98228",
 ]
 
 # Sequential colors for heatmaps (blue gradient). highcharts_builder draws
-# _HEATMAP_GRADIENT_DARK's two endpoints from this scale.
+# _HEATMAP_GRADIENT's two endpoints from this scale.
 chartSequentialColors = [
     "#0c4a6e",
     "#075985",
@@ -102,12 +140,12 @@ chartSequentialColors = [
 
 # Dataframe styling
 dataframeBorderColor = "#334155"
-dataframeHeaderBackgroundColor = "#1e293b"
+dataframeHeaderBackgroundColor = "#243146"
 
 # Sidebar
 [theme.sidebar]
 backgroundColor = "#0f172a"
-secondaryBackgroundColor = "#1e293b"
+secondaryBackgroundColor = "#243146"
 codeBackgroundColor = "#1e293b"
 textColor = "#f1f5f9"
 borderColor = "#334155"

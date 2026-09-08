@@ -107,8 +107,10 @@ dependencies are unauthenticated CDNs — `code.highcharts.com` (interactive) an
   pinned to `pyproject.toml`'s `version` — the guard that closed the suite's own
   [blind spot](docs/decisions.md#packaging-the-fact-with-no-second-home). Reads the files
   directly, no build step.
-- `.streamlit/config.toml` — project Streamlit theme: the bundled **financial-dashboard**
-  template, as a **single `[theme]`** (plus `[theme.sidebar]`). That shape is the
+- `.streamlit/config.toml` — project Streamlit theme: **Studio Slate**, the bundled
+  financial-dashboard template's chrome and typography kept, its categorical scale
+  replaced by one designed for this app (see Conventions), as a **single `[theme]`**
+  (plus `[theme.sidebar]`). That shape is the
   decision, not an omission: defining both `[theme.light]` and `[theme.dark]` is what
   unlocks the in-app light/dark toggle, so a lone `[theme]` locks the app to one mode,
   here **dark**. Pinned by `test_app_theme_is_a_single_mode_with_no_light_dark_toggle`,
@@ -533,12 +535,22 @@ conventions in their original, fully-enumerated form); the argument behind each 
   likewise its `backgroundColor`/`textColor`/`grayColor`/`borderColor`, and
   `_HEATMAP_GRADIENT`'s two endpoints come off its `chartSequentialColors`. All of it is
   guarded by `test_theme_colors_stay_in_sync_with_config`, so the copy fails the suite
-  rather than drifting. Exactly **one** entry deviates from the upstream template — index 6
-  is pink, not the template's gray, guarded by
-  `test_no_series_colour_collides_with_the_chart_chrome`
-  ([why](docs/decisions.md#palette-the-one-deviation-and-the-second-mode-smell)). The
+  rather than drifting. The categorical scale is **designed, not inherited** — the chrome
+  came from the upstream template and the palette no longer does, because a template's
+  palette is a chart palette only by accident
+  ([why, and what it measured](docs/decisions.md#palette-the-scale-that-was-a-palette-by-accident)).
+  Two guards hold it: nothing may **be** a chrome colour
+  (`test_no_series_colour_collides_with_the_chart_chrome`, identity), and no two entries
+  may **read as** one colour, dichromacy included
+  (`test_no_palette_pair_collapses_under_colour_vision_deficiency`, CIEDE2000). The second
+  is the one the first could not express, and the template's blue and violet failed it at
+  **0.31** while passing everything else in the suite. The
   palette's **order** is load-bearing beyond its hues — `_WATERFALL_*` and
   `_BOXPLOT_OUTLIER_COLOR` index into it, so a reshuffle repaints "a rise" and "a loss".
+  Its **lightness** is load-bearing too, and only in one direction: under deuteranopia a
+  green and a red both simulate to yellows, so the rise/fall pair is separated by L\*
+  rather than hue — and a saturated red tops out at L\* 68 while a green reaches 84, so the
+  rise is necessarily the lighter mark. The fall buys prominence with **chroma** instead.
   There is one mode, and a constant written at build time then overwritten by `_themed` is
   the smell that a second one is still hiding. Two marks sit outside the categorical
   palette: `heatmap` colors its cells by a sequential `colorAxis`, and `bullet`'s goal

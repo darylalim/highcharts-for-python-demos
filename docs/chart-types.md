@@ -2010,13 +2010,23 @@ that it is **re-derived** when the aggregation changes.
   never through a Highcharts default.
 - Theme charts via `highcharts_builder.DEFAULT_COLORS` (applied by
   `build_options` to every chart, so the iframe and PNG paths are themed too). It **is**
-  `.streamlit/config.toml`'s `chartCategoricalColors` — the bundled financial-dashboard
-  theme's categorical scale — copied by hand, because no theme CSS reaches an iframe or a
+  `.streamlit/config.toml`'s `chartCategoricalColors` — a categorical scale **designed for
+  this app**, under the chrome the bundled financial-dashboard template still supplies —
+  copied by hand, because no theme CSS reaches an iframe or a
   server-side PNG and Streamlit applies that key only to its own Vega/Plotly charts, of
   which this app has none. `_DARK_CHROME`'s `bg`/`text`/`muted`/`grid` are the same theme's
   `backgroundColor`/`textColor`/`grayColor`/`borderColor`; only its `axis` is the builder's
   own, a Streamlit theme having no counterpart for tick lines. Every one of those copies is
   guarded by `test_theme_colors_stay_in_sync_with_config`.
+  The scale is designed rather than inherited because a template's palette is a chart
+  palette only by accident: the one shipped here put every entry at L\* 64-81, leaving hue
+  as the sole carrier of series identity, and its blue and violet were **0.31** CIEDE2000
+  apart under deuteranopia — one colour, at slots 0 and 2. Two guards now hold the scale
+  from opposite sides: `test_no_series_colour_collides_with_the_chart_chrome` (nothing may
+  *be* a chrome colour) and `test_no_palette_pair_collapses_under_colour_vision_deficiency`
+  (no two entries may *read as* one, dichromacy included). See
+  [decisions.md](decisions.md#palette-the-scale-that-was-a-palette-by-accident) for the
+  measurements and for why the rise/fall lightness split can only run one way.
   The palette's **order** carries meaning the hues alone do not: `_WATERFALL_UP_COLOR`,
   `_WATERFALL_DOWN_COLOR`, `_WATERFALL_SUM_COLOR` and `_BOXPLOT_OUTLIER_COLOR` index into
   it, so reordering the config list repaints "a rise", "a loss" and "the total" while every

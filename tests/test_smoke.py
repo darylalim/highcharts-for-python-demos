@@ -102,6 +102,7 @@ Layers:
 
 import ast
 import inspect
+import itertools
 import math
 import re
 import sys
@@ -1075,6 +1076,166 @@ def test_no_series_colour_collides_with_the_chart_chrome():
     assert _SUNBURST_ROOT_COLOR not in _DARK_CHROME.values()
 
 
+def _lab(hex_color):
+    """CIELAB (D65, 2°) of a #rrggbb string."""
+    raw = hex_color.lstrip("#")
+    rgb = [int(raw[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+    x = lin[0] * 0.4124564 + lin[1] * 0.3575761 + lin[2] * 0.1804375
+    y = lin[0] * 0.2126729 + lin[1] * 0.7151522 + lin[2] * 0.0721750
+    z = lin[0] * 0.0193339 + lin[1] * 0.1191920 + lin[2] * 0.9503041
+
+    def f(t):
+        return t ** (1 / 3) if t > (6 / 29) ** 3 else t / (3 * (6 / 29) ** 2) + 4 / 29
+
+    fx, fy, fz = f(x / 0.95047), f(y / 1.0), f(z / 1.08883)
+    return 116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)
+
+
+def _ciede2000(c1, c2):
+    """CIEDE2000 colour difference. ~2.3 is one just-noticeable difference."""
+    l1, a1, b1 = _lab(c1)
+    l2, a2, b2 = _lab(c2)
+    cb = (math.hypot(a1, b1) + math.hypot(a2, b2)) / 2
+    g = 0.5 * (1 - math.sqrt(cb**7 / (cb**7 + 25**7))) if cb else 0.5
+    a1p, a2p = (1 + g) * a1, (1 + g) * a2
+    c1p, c2p = math.hypot(a1p, b1), math.hypot(a2p, b2)
+    h1p = math.degrees(math.atan2(b1, a1p)) % 360 if (a1p or b1) else 0
+    h2p = math.degrees(math.atan2(b2, a2p)) % 360 if (a2p or b2) else 0
+    dlp, dcp = l2 - l1, c2p - c1p
+    if c1p * c2p == 0:
+        dhp = 0.0
+    elif abs(h2p - h1p) <= 180:
+        dhp = h2p - h1p
+    else:
+        dhp = h2p - h1p - 360 if h2p - h1p > 180 else h2p - h1p + 360
+    dhp = 2 * math.sqrt(c1p * c2p) * math.sin(math.radians(dhp) / 2)
+    lbp, cbp = (l1 + l2) / 2, (c1p + c2p) / 2
+    if c1p * c2p == 0:
+        hbp = h1p + h2p
+    elif abs(h1p - h2p) <= 180:
+        hbp = (h1p + h2p) / 2
+    else:
+        hbp = (h1p + h2p + 360) / 2 if h1p + h2p < 360 else (h1p + h2p - 360) / 2
+    t = (
+        1
+        - 0.17 * math.cos(math.radians(hbp - 30))
+        + 0.24 * math.cos(math.radians(2 * hbp))
+        + 0.32 * math.cos(math.radians(3 * hbp + 6))
+        - 0.20 * math.cos(math.radians(4 * hbp - 63))
+    )
+    sl = 1 + (0.015 * (lbp - 50) ** 2) / math.sqrt(20 + (lbp - 50) ** 2)
+    sc, sh = 1 + 0.045 * cbp, 1 + 0.015 * cbp * t
+    rt = -math.sin(math.radians(60 * math.exp(-(((hbp - 275) / 25) ** 2)))) * (
+        2 * math.sqrt(cbp**7 / (cbp**7 + 25**7)) if cbp else 0
+    )
+    return math.sqrt(
+        (dlp / sl) ** 2
+        + (dcp / sc) ** 2
+        + (dhp / sh) ** 2
+        + rt * (dcp / sc) * (dhp / sh)
+    )
+
+
+# Machado, Oliveira & Fernandes (2009), severity 1.0 — the standard simulation matrices.
+_CVD_MATRICES = {
+    "deuteranopia": (
+        (0.367322, 0.860646, -0.227968),
+        (0.280085, 0.672501, 0.047413),
+        (-0.011820, 0.042940, 0.968881),
+    ),
+    "protanopia": (
+        (0.152286, 1.052583, -0.204868),
+        (0.114503, 0.786281, 0.099216),
+        (-0.003882, -0.048116, 1.051998),
+    ),
+    "tritanopia": (
+        (1.255528, -0.076749, -0.178779),
+        (-0.078411, 0.930809, 0.147602),
+        (0.004733, 0.691367, 0.303900),
+    ),
+}
+
+
+def _simulate_cvd(hex_color, kind):
+    """The given colour as a dichromat sees it, back as a #rrggbb string."""
+    raw = hex_color.lstrip("#")
+    rgb = [int(raw[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    lin = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in rgb]
+    out = []
+    for row in _CVD_MATRICES[kind]:
+        v = max(0.0, min(1.0, sum(m * c for m, c in zip(row, lin, strict=True))))
+        v = 12.92 * v if v <= 0.0031308 else 1.055 * v ** (1 / 2.4) - 0.055
+        out.append(round(max(0.0, min(1.0, v)) * 255))
+    return "#" + "".join(f"{c:02x}" for c in out)
+
+
+# Below this, two series are one series. A just-noticeable difference is ~2.3 CIEDE2000;
+# 8 is a deliberately forgiving floor that still catches a collapse, chosen so a
+# defensible future palette is not failed for being a couple of points tighter than this
+# one (whose worst case is 9.6) while 0.31 can never come back.
+MIN_SERIES_SEPARATION = 8.0
+
+
+def test_no_palette_pair_collapses_under_colour_vision_deficiency():
+    """Every pair of series hues must stay distinguishable, colour vision or not.
+
+    The guard that was missing, and the one the identity check above cannot express.
+    `test_no_series_colour_collides_with_the_chart_chrome` asks whether two roles are the
+    same STRING; this asks whether two series are the same COLOUR to a viewer, which is a
+    different question and had no second home at all.
+
+    It is not hypothetical. The financial-dashboard template this app shipped put
+    `#60a5fa` at index 0 and `#a78bfa` at index 2 — 33 CIEDE2000 apart in normal vision,
+    and **0.31** apart under deuteranopia, i.e. literally one colour for roughly 6% of men,
+    at the two slots a three-series chart fills first. Every existing assertion passed:
+    the hexes differed, none was a chrome value, all cleared contrast against the
+    background. Nothing in the suite could see it, and it shipped.
+
+    ALL pairs, not adjacent ones. Of the 29 supported types, treemap, sunburst,
+    networkgraph, scatter, bubble and heatmap place marks by DATA, so no ordering of the
+    palette can keep a given pair apart on screen — index 0 and index 6 can land side by
+    side. Adjacency is not a defence.
+    """
+    for kind in _CVD_MATRICES:
+        seen = [_simulate_cvd(c, kind) for c in DEFAULT_COLORS]
+        for i, j in itertools.combinations(range(len(DEFAULT_COLORS)), 2):
+            delta = _ciede2000(seen[i], seen[j])
+            assert delta >= MIN_SERIES_SEPARATION, (
+                f"under {kind}, DEFAULT_COLORS[{i}] {DEFAULT_COLORS[i]} and "
+                f"[{j}] {DEFAULT_COLORS[j]} are {delta:.2f} apart "
+                f"(floor {MIN_SERIES_SEPARATION}) — they read as one series"
+            )
+    # ...and in ordinary vision too, where the bar is higher because nothing is collapsing
+    # it. This is what stops a "fix" that spaces the palette for dichromats by muddying it
+    # for everyone else.
+    for i, j in itertools.combinations(range(len(DEFAULT_COLORS)), 2):
+        delta = _ciede2000(DEFAULT_COLORS[i], DEFAULT_COLORS[j])
+        assert delta >= 15.0, (
+            f"DEFAULT_COLORS[{i}] {DEFAULT_COLORS[i]} and [{j}] {DEFAULT_COLORS[j]} are "
+            f"only {delta:.2f} apart in normal vision"
+        )
+
+
+def test_heatmap_low_end_is_distinguishable_from_an_empty_cell():
+    """A missing cell must not read as a cold one — the claim _HEATMAP_NULL is chosen ON.
+
+    `_HEATMAP_NULL`'s comment argues an empty cell takes the gridline slate rather than a
+    pale ramp colour "so a missing reading reads as 'no cell here' ... instead of as a low
+    value on the ramp". That is an argument about a colour DIFFERENCE, and it was never
+    measured: with the ramp's cold end at `#0c4a6e` the two were 8.7 apart, inside the
+    band where they are confusable, so the comment described an intent the code did not
+    achieve. Asserting it here is what makes the rationale true rather than aspirational.
+    """
+    from highcharts_builder import _HEATMAP_GRADIENT, _HEATMAP_NULL
+
+    delta = _ciede2000(_HEATMAP_GRADIENT["minColor"], _HEATMAP_NULL)
+    assert delta >= 12.0, (
+        f"the ramp's cold end {_HEATMAP_GRADIENT['minColor']} is only {delta:.2f} from the "
+        f"empty-cell fill {_HEATMAP_NULL}; a missing reading will read as a low value"
+    )
+
+
 def _config_theme():
     """The `[theme]` table of .streamlit/config.toml, hex values case-normalized.
 
@@ -1556,7 +1717,7 @@ def test_heatmap_dark_mode_themes_the_color_axis():
     df = pd.DataFrame({"day": ["Mon", "Tue"], "AM": [1.0, 2.0]})
     opts = build_options(df, "heatmap", "day", ["AM"])
     assert opts["chart"]["backgroundColor"] == "#0f172a"
-    assert opts["colorAxis"]["minColor"] == "#0c4a6e"
+    assert opts["colorAxis"]["minColor"] == "#075985"
     assert opts["colorAxis"]["maxColor"] == "#7dd3fc"
     assert opts["colorAxis"]["labels"]["style"]["color"] == "#94a3b8"
     # The gradient legend's tick lines (full-width gridlines + the shorter edge ticks)

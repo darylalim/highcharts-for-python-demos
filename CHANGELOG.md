@@ -33,6 +33,57 @@ worth stating rather than tidying away:
 
 Dates are the last commit at that version — the point it stopped being current.
 
+## [0.19.0] - 2026-09-07
+
+**Studio Slate.** The chrome and typography of the bundled financial-dashboard template
+stay; its categorical scale does not. A template's palette is a chart palette only by
+accident, and this app is nothing but charts — so the scale is now designed against this
+codebase's own constraints, and two new guards keep it that way.
+
+### Changed
+
+- **`chartCategoricalColors` / `DEFAULT_COLORS` is a designed scale, not an inherited
+  one.** The template shipped the Tailwind **-400 step of eight hues**: every entry at
+  L\* 64-81, so **hue was the only channel carrying series identity**. Measured in
+  CIEDE2000 with dichromacy simulated (Machado-Oliveira-Fernandes 2009), four of its 28
+  pairs sat below ΔE 20 in normal vision — blue/sky **11.7**, red/pink 18.6, yellow/orange
+  18.9, blue/violet 19.3 — and six below ΔE 12 under deuteranopia, where `#60a5fa` and
+  `#a78bfa` came out **0.31 apart**: one colour, for roughly 6% of men, at slots 0 and 2,
+  which is exactly where a three-series chart puts them. Worst pair now **19.4** normal,
+  **10.1** deuteranopia, **9.6** protanopia, **10.3** tritanopia. Index 0 is deliberately
+  unchanged — it is the single-series default, `_WATERFALL_SUM_COLOR`, bullet's bar,
+  dumbbell's after-state and Streamlit's accent, and freeing it was measured at ~1.1 ΔE for
+  a dimmer primary, then declined.
+- **`secondaryBackgroundColor` is a surface again**, `#1e293b` → `#243146`. The old value
+  was **1.22:1** against the page — below any legible card boundary, in an app that is
+  mostly controls. Now 1.36:1, chosen against the semantic *text* tokens rather than
+  against the page alone, so every one of them still clears 4.5:1 on it.
+- **Sky left the categorical scale.** `#38bdf8` was simultaneously
+  `chartCategoricalColors[5]` **and** `chartSequentialColors[5]` — a categorical *identity*
+  and a heatmap *value* painted the same hex. A cyan takes the slot; the ramp keeps its hue.
+
+### Fixed
+
+- **A missing heatmap cell read as a cold one.** `_HEATMAP_NULL`'s comment argues an empty
+  cell takes the gridline slate "so a missing reading reads as 'no cell here' … instead of
+  as a low value on the ramp" — but the ramp's cold end and the null fill were ΔE **8.7**
+  apart, inside the confusable band, so the rationale was not true of the code it described.
+  `_HEATMAP_GRADIENT["minColor"]` moves one stop up the sequential scale
+  (`#0c4a6e` → `#075985`), putting them at 12.5.
+
+### Added
+
+- **`test_no_palette_pair_collapses_under_colour_vision_deficiency`** — the guard that was
+  missing. `test_no_series_colour_collides_with_the_chart_chrome` asks whether two roles are
+  the same *string*; this asks whether two series are the same *colour to a viewer*, over
+  **all** pairs under each of the three dichromacies. Of the 29 types, treemap, sunburst,
+  networkgraph, scatter, bubble and heatmap place marks by data, so no palette ordering can
+  keep a given pair apart on screen — adjacency is not a defence. The shipped 0.31 passed
+  every other assertion in the suite.
+- **`test_heatmap_low_end_is_distinguishable_from_an_empty_cell`** — a comment that argues
+  from a colour *difference* is now pinned by that difference, rather than decaying into an
+  intention.
+
 ## [0.18.1] - 2026-08-22
 
 An audit of `streamlit_app.py` against the reference docs bundled inside Streamlit's own
