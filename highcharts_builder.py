@@ -487,16 +487,20 @@ UNWEIGHTED_NODE_LINK_TYPES = NETWORKGRAPH_TYPES + ORGANIZATION_TYPES
 # The palette is applied to every chart, and there is no second mode to keep it consistent
 # ACROSS any more: the config is a single [theme], so `_themed` applies `_DARK_CHROME`
 # unconditionally. These hues are therefore read against the slate background and nothing
-# else — which is the whole reason a light mode could not be left nominally supported.
+# else — which is the whole reason a light mode could not be left nominally supported: on
+# white this scale runs **1.63-3.56:1**, so five of the eight would fail AA outright. (The
+# template's ran 1.67-2.77:1. The number is restated rather than dropped because a claim
+# with its measurement removed is the decay docs/decisions.md warns about, and this one is
+# now MORE strongly supported, not less.)
 DEFAULT_COLORS = (
     "#60a5fa",  # blue (== config.toml primaryColor) — unchanged; the brand
-    "#99d480",  # green — a waterfall RISE, ~19 L* above the fall
-    "#f4b6f8",  # lilac — pale ON PURPOSE: a saturated violet is what collides with blue
-    "#ff4c69",  # red — a waterfall FALL and a boxplot outlier; loud by chroma, not by L*
-    "#fcc017",  # gold
-    "#55d2c6",  # cyan — replaces the template's sky, which was ALSO chartSequentialColors[5]
-    "#d363bc",  # magenta
-    "#e98228",  # orange
+    "#9cd882",  # green — a waterfall RISE, ~24 L* above the fall
+    "#e5bbff",  # lilac — pale ON PURPOSE: a saturated violet is what collides with blue
+    "#e25e58",  # red — a waterfall FALL and a boxplot outlier; loud by chroma, not by L*
+    "#fabc2b",  # gold
+    "#45d9c8",  # cyan — replaces the template's sky, which was ALSO chartSequentialColors[5]
+    "#cd5cc1",  # magenta
+    "#ec8c4a",  # orange
 )
 
 # Chart "chrome" (backgrounds, text, axes, gridlines, tooltip) for dark mode. The series
@@ -505,11 +509,18 @@ DEFAULT_COLORS = (
 # under different names, kept in sync by the same test as the palette; only "axis" is
 # this module's alone, having no counterpart in a Streamlit theme.
 #
-# Coincidence worth stating so nobody "de-duplicates" it: "text" equals _HEATMAP_NULL
-# (and so _GAUGE_TRACK_COLOR) by value and NOT by meaning. They cannot collide in one
-# options dict — _themed flips both of those to "grid" in dark mode, and writes no text
-# color at all in light mode — but an alias would tie a dark-mode text color to a
-# light-mode fill, and a later edit to either would silently drag the other.
+# "grid" is the busiest slot and the aliasing rule points AT it, not away from it:
+# _HEATMAP_NULL and (through it) _GAUGE_TRACK_COLOR are this value, deliberately, because
+# an empty heatmap cell and a gauge's unfilled remainder both mean "no value here" and
+# that is what the gridline slate says. Those aliases are correct and should stay.
+#
+# What must NOT be aliased is anything whose equality is a coincidence of the current
+# theme. This block used to warn against de-duplicating "text" with _HEATMAP_NULL "by
+# value" — a warning that outlived its facts twice over: the two are #f1f5f9 and #334155
+# and have not been equal since _HEATMAP_NULL was pointed at "grid", and the reason given
+# (an alias would tie a dark-mode text colour to a light-mode fill) described a light mode
+# removed in 0.18.0. Restated as the rule that survives: alias on MEANING, never on a hex
+# two roles happen to share.
 _DARK_CHROME = {
     "bg": "#0f172a",  # == config.toml backgroundColor
     "text": "#f1f5f9",  # titles, legend, pie labels (== textColor)
@@ -519,14 +530,18 @@ _DARK_CHROME = {
 }
 
 # Sequential colorAxis gradient for heatmap cell values — the one chart type that
-# colors by value, not by the categorical DEFAULT_COLORS series palette. The light
-# ramp is anchored on the brand primary (DEFAULT_COLORS[0]); the dark ramp's two
-# endpoints are drawn from the config theme's own `chartSequentialColors` scale, keeping
-# the low end dark enough to sit against _DARK_CHROME["bg"] and the high end bright
-# enough to stay legible on it. WHICH two stops is a legibility judgment settled by
-# rendering, so the test pins that both are ON that scale rather than pinning their
-# indices — the rule is what holds, not the choice. Missing cells use _HEATMAP_NULL,
-# flipped to _DARK_CHROME["grid"] in dark mode by _themed.
+# colors by value, not by the categorical DEFAULT_COLORS series palette. There is ONE
+# ramp: its two endpoints are drawn from the config theme's own `chartSequentialColors`
+# scale, keeping the low end dark enough to sit against _DARK_CHROME["bg"] and the high
+# end bright enough to stay legible on it. WHICH two stops is a legibility judgment
+# settled by rendering, so the test pins that both are ON that scale rather than pinning
+# their indices — the rule is what holds, not the choice. Missing cells use _HEATMAP_NULL,
+# which IS _DARK_CHROME["grid"] by definition below; nothing flips it at build time and
+# `_themed`'s heatmap hook never touches `nullColor` (it sets only the colorAxis labels,
+# gridlines and ticks). An earlier version of this note described a light ramp anchored on
+# DEFAULT_COLORS[0] and a dark one selected against it — that was the two-mode world
+# removed in 0.18.0, and it is exactly the "second mode still hiding" smell CLAUDE.md
+# names, left behind in prose after the code stopped having one.
 #
 # The low end MOVED one stop up the scale (#0c4a6e -> #075985), and it is a correctness
 # fix rather than taste. _HEATMAP_NULL's own note below says an empty cell takes the

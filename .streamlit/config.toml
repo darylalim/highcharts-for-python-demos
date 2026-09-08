@@ -29,7 +29,11 @@ backgroundColor = "#0f172a"          # deep slate
 # A REAL surface step, not a tint. The template shipped #1e293b here, which is 1.22:1
 # against the page — below any legible card boundary, in an app that is mostly controls
 # (14 selectboxes, pills, a multiselect, a file uploader, a dataframe, four metrics). This
-# is 1.36:1: still quiet, but the wells and bordered containers now have an edge. It is a
+# is 1.36:1, and the gain is the FILL STEP, not the outline: `borderColor` actually loses
+# against this lighter surface (1.41:1 -> 1.27:1), so a container now reads by its own
+# ground rather than by its edge. Stated because the opposite is the natural assumption,
+# and because raising `borderColor` to compensate is not free — it is also
+# _DARK_CHROME["grid"], so it would brighten every chart gridline. It is a
 # genuine interpolation on the Tailwind slate line, not a guess, and it was chosen against
 # the SEMANTIC text tokens below rather than against the page alone — every one of them
 # still clears 4.5:1 ON this surface, which is the check a brighter step would fail.
@@ -93,34 +97,44 @@ grayColor = "#94a3b8"   # neutral/secondary text (== _DARK_CHROME["muted"])
 #     default, the waterfall total, the bullet bar, the dumbbell's after-marker, every
 #     Streamlit accent — so it stays the brand blue AND stays bright (7.02:1). Freeing it
 #     buys ~1.1 dE of separation and costs a dimmer primary; that trade was declined.
-#   * The rise (1) and the fall (3) are split by ~19 L* points. Under deuteranopia green
-#     and red both simulate to yellows, so HUE cannot separate them and lightness is the
-#     only channel left: the pair goes from dE 9.9 to 24.6. The split runs rise-bright,
-#     and only that way — a saturated red that clears 4.5:1 exists only between L* 57 and
-#     68, while a saturated green reaches L* 84, so a fall CANNOT be made the lighter mark
-#     without ceasing to be red. The fall buys its prominence with CHROMA (73) instead.
+#   * The rise (1) and the fall (3) are split by ~24 L* points, and that ONE pair carries a
+#     higher floor than the rest: confusing a gain with a loss produces a WRONG READING,
+#     not merely an ugly one. Under deuteranopia green and red both simulate to yellows, so
+#     HUE cannot separate them and lightness is the only channel left — the pair goes from
+#     dE00 **9.89 to 14.65**. (A first pass claimed 24.6 here. It was never computed, and
+#     the honest figure is the smaller one: this pair is expensive, because the split runs
+#     rise-bright and ONLY that way — a saturated red that clears 4.5:1 exists only between
+#     L* 57 and 68 while a saturated green reaches 84, so a fall cannot be made the lighter
+#     mark without ceasing to read as red.) The fall buys prominence with CHROMA instead.
 #   * Sky is gone. #38bdf8 was simultaneously chartCategoricalColors[5] and
 #     chartSequentialColors[5] — a categorical IDENTITY and a heatmap VALUE painted the
 #     same hex. Cyan takes the slot and the sequential ramp gets its hue back.
-#   * Every entry sits in a 2.06x prominence band (5.34-10.99:1). A wider spread buys
+#   * Every entry sits in a 2.18x prominence band (5.01-10.95:1). A wider spread buys
 #     more separation but imposes an ordinal rank on data that has none.
 #   * Every entry stays above YIQ 128000, so Highcharts' `contrast` keyword resolves the
 #     in-mark labels on pie/treemap/heatmap/waterfall to BLACK on all eight. Verified by
 #     reading the rendered DOM, not from the arithmetic — the two published accounts of
 #     that threshold disagree.
-# Result: worst pair 19.4 normal, 10.1 deuteranopia, 9.6 protanopia, 10.3 tritanopia.
+#   * The scale is searched against the CHROME as well as against itself. This is where
+#     the original incident lived and a first pass missed it: series 7 came out dE00 6.24
+#     from `grayColor` — the axis-LABEL colour — under deuteranopia, which is the 1.00:1
+#     grey collision reproduced in a channel an identity check cannot see. Palette-vs-
+#     chrome is now 9.28 at worst, and _SUNBURST_ROOT_COLOR (which a sunburst draws
+#     surrounded by palette-coloured children) 12.39.
+# Result: worst pair 19.8 normal, 9.3 deuteranopia, 9.6 protanopia, 9.5 tritanopia, and
+# nothing in the scale within dE00 9.28 of a chrome value under any of the three.
 # The lilac at index 2 is deliberately the palest thing here: a SATURATED violet is
 # exactly what collides with a locked mid-blue under protanopia, so its low chroma is the
 # price of not re-committing the bug this palette exists to fix.
 chartCategoricalColors = [
     "#60a5fa",
-    "#99d480",
-    "#f4b6f8",
-    "#ff4c69",
-    "#fcc017",
-    "#55d2c6",
-    "#d363bc",
-    "#e98228",
+    "#9cd882",
+    "#e5bbff",
+    "#e25e58",
+    "#fabc2b",
+    "#45d9c8",
+    "#cd5cc1",
+    "#ec8c4a",
 ]
 
 # Sequential colors for heatmaps (blue gradient). highcharts_builder draws

@@ -274,8 +274,10 @@ cleared contrast against the background. The identity guard asks whether two rol
 the same *string*; this asks whether two series are the same *colour to a viewer*, and
 that question had no second home at all. It does now:
 `test_no_palette_pair_collapses_under_colour_vision_deficiency`, over **all** pairs rather
-than adjacent ones — of 29 types, treemap, sunburst, networkgraph, scatter, bubble and
-heatmap place marks by data, so no ordering can keep a given pair apart on screen.
+than adjacent ones — of 29 types, treemap, sunburst, networkgraph, scatter and bubble
+place marks by data, so no ordering can keep a given pair apart on screen. (Heatmap is
+*not* one of them, though an earlier draft of this sentence said so: it colours by
+`colorAxis` and never renders a categorical hue at all.)
 
 **What replaced it.** A scale searched under this codebase's own constraints rather than
 chosen by eye — because eye is exactly what fails here: every hand-assembled candidate
