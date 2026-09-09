@@ -55,11 +55,33 @@ dependencies are unauthenticated CDNs — `code.highcharts.com` (interactive) an
   wide CSVs, plus one extra column selector per extra column kwarg), the `@st.cache_data`
   wrappers, a KPI metric row (its third metric adapts via `MARK_METRICS` — see
   [Chart types](#chart-types)), the render-mode selector (interactive iframe / static
-  PNG), the chart embed, and a toggle revealing the generated Highcharts config (JS). The
+  PNG — the PNG path passing `CHART_PNG_WIDTH` so the export server lays the chart out at the
+  width it will be shown at rather than at its own 600px default, see
+  [Conventions](#conventions)), the chart embed, and a toggle revealing the generated
+  Highcharts config (JS). The
   **no-plottable-columns gate** runs *below* the chart-type selectbox and is
   **type-aware**: xrange's start/end are coordinates and may be dates, and a date column
   is object dtype, so a canonical Gantt CSV has no numeric columns at all and a
-  `select_dtypes("number")` gate would `st.stop()` it before the picker was drawn.
+  `select_dtypes("number")` gate would `st.stop()` it before the picker was drawn. It is a
+  **table** — `vocabularies`, one row per column vocabulary, each carrying the family
+  constant, the source list, and the two messages (the frame has no such column / none is
+  selected): `XRANGE_TYPES` needs a coordinate, `TIMELINE_TYPES` needs a **date** (a stricter
+  rule, not the same exemption — a frame of pure numbers passes xrange's row and must fail
+  timeline's, or the landing dataset would sail through and land the Date picker on
+  `revenue`), `UNWEIGHTED_NODE_LINK_TYPES` carries `None` for **exempt**, and every other type
+  falls through to the numeric default. A row is what makes adding a type **one** edit: the
+  hand-written arms it replaced needed two — its own arm, plus a `not in` clause on the numeric
+  one — and forgetting the second was silent, the type passing its own arm and then being
+  refused by the numeric one with the wrong message. The **single-select Y picker's source** is
+  that same row (`y_source`), not a second three-way branch beside it, so "the picker can never
+  offer a column the builder would refuse" is one site rather than two agreeing (the multi-select
+  branch takes the table's default list, `numeric_cols`, which is the same list by another name); the
+  empty-selection warning is the row's message too, since "numeric" is plainly wrong for both
+  types whose Y is a **coordinate**. Both source lists come from **one** `picker_columns(df)`
+  call rather than two helpers that each re-sniff every column. And `keep_picker_state()` runs
+  in front of the gate's `st.stop()`: Streamlit garbage-collects the session-state entry of any
+  keyed widget a run does not instantiate, and this gate stops *above* the keyed X and Y
+  pickers ([the measurement](docs/decisions.md#keyed-widgets-the-third-way-a-picker-loses-its-answer)).
 - `highcharts_builder.py` — pure, Streamlit-free helpers that turn a DataFrame into a
   Highcharts options `dict`, a `Chart`, and embeddable HTML or PNG bytes. Independently
   importable and unit-testable. It also owns three things that would otherwise drift from
@@ -67,9 +89,17 @@ dependencies are unauthenticated CDNs — `code.highcharts.com` (interactive) an
   `explain_xrange_error`, `explain_gauge_error` — so a message can't drift from the error
   it stands in for; the first duck-types on `exc.response.status_code` rather than
   importing `requests`, which this project never declares), the **options** its widgets
-  offer (`coordinate_columns`, `GAUGE_AGGREGATIONS`, `gauge_dial`), and `count_marks`,
-  which reuses the same drop predicates — or, for sunburst and xrange, the whole build —
-  so the KPI can't drift from the chart.
+  offer (`picker_columns` — one sniff of the frame answering both coordinate pickers at once,
+  with `coordinate_columns` / `date_columns` as thin wrappers over its two halves — the app
+  reads the pair, and the wrappers stay for the pure-API caller and their own tests. What the one
+  sniff makes structural is that both lists answer the same question once; "every date column is a
+  coordinate column" is one membership test apart against named kind tuples — and the subset itself pinned by `test_picker_columns_answers_both_pickers_from_one_sniff`, since `_DATE_KINDS` is a second literal rather than something derived from `_COORDINATE_KINDS` — plus `GAUGE_AGGREGATIONS` and `gauge_dial`), and
+  `count_marks`, which reuses the same drop predicates — or, for sunburst, xrange and
+  timeline, the whole build — so the KPI can't drift from the chart. Timeline adds **no**
+  `explain_*` of its own, and that is the design: `date_columns` narrows its picker to
+  columns that already pass, so its one contradiction is **unreachable** from the app rather
+  than explained after the fact — which is strictly better, and the reason the list above
+  gained an *options* entry instead of a *diagnosis* one.
 - `sample_data.py` — pure (Streamlit-free) built-in sample datasets and the `SAMPLES`
   registry the app offers when no CSV is uploaded. Every sample **but one** leads with a
   **category column**, and that is load-bearing rather than tidy: the app opens on `line`
@@ -79,7 +109,11 @@ dependencies are unauthenticated CDNs — `code.highcharts.com` (interactive) an
   counterexample, not a shape to copy. Samples are otherwise designed as **mirrors** —
   the columnrange, arearange, bullet, variwide and dumbbell samples all carry two
   magnitude columns and mean something different by them, so reading them side by side
-  shows that "two magnitude columns" is a data *shape*, not a chart. Per-sample rationale:
+  shows that "two magnitude columns" is a data *shape*, not a chart. The timeline sample
+  mirrors the xrange one on the **other** axis, and for the same purpose: both carry dates
+  and neither carries a magnitude, but a release plan's rows have EXTENT (two coordinates,
+  so the mark is a bar) and a milestone list has none (one, so the mark is a point) — the
+  difference is in the data, not in the drawing. Per-sample rationale:
   [`docs/chart-types.md`](docs/chart-types.md#the-sample-datasets).
 - `tests/test_smoke.py` — builder unit tests (every chart type, the missing-data and edge
   cases, the validation guards, and an end-to-end pass driving every supported type
@@ -159,7 +193,7 @@ dependencies are unauthenticated CDNs — `code.highcharts.com` (interactive) an
 
 ## Chart types
 
-29 supported types. The public API:
+30 supported types. The public API:
 
 ```python
 # build_options() -> Chart.from_options() -> set container, in one call:
@@ -192,6 +226,14 @@ signatures, so the cache-layer checks pick a new kwarg up automatically — but 
 **table below** is pinned by name, so a new row is not optional. Each row's middle cell is
 the widget's label *verbatim*, parenthetical included.
 
+The **cheapest** answer is still a type that needs no kwarg at all, and `timeline` is the
+standing proof one exists: it spends `x_col` on the event's name and `y_cols[0]` on its
+date, so a whole new type landed with this table untouched. That is checkable rather than
+asserted — `test_claude_md_states_the_real_extra_column_kwarg_count`,
+`test_claude_md_kwarg_table_names_every_extra_column_kwarg` and
+`test_forwarded_arguments_derivation_is_not_vacuous` all read the builders' own signatures,
+so a tenth kwarg would fail them; all three stayed green through that change, **unedited**.
+
 | Kwarg | Control label | Types |
 |---|---|---|
 | `size_col` | Size (Z) | bubble |
@@ -222,10 +264,18 @@ it is documented:
 | Flows / Links / Reports | sankey, dependencywheel · networkgraph · organization |
 | Boxes / Steps / Sectors | boxplot · waterfall · sunburst |
 | Bars / Ranges / Points | xrange, variwide · columnrange · arearange |
-| Measures / Changes | bullet · dumbbell |
+| Measures / Changes / Events | bullet · dumbbell · timeline |
 
 Absent types report "Series plotted". Gauge's absence is a *decision*: its marks **are**
 its series, so an entry would restate `len(y_cols)` — the can't-drift rule run backwards.
+
+Timeline sits in the **last** row rather than beside xrange in the fourth, and the row it
+joins is the argument. Column *role* would put it with xrange — both spend `y_cols[0]` on a
+coordinate — but the table groups by what the **noun** does, and xrange's "Bars" names the
+shape drawn. A timeline draws three things per event (a marker, a label, the connector
+between them) and counts none of them, exactly as a dumbbell draws three per category and
+counts none: so "Events", like "Changes" and "Measures", names the **reading** because there
+is no single shape left to name.
 
 **Everything else about a type — its null policy, its `_themed` hooks, its module
 resolution, its tooltip token, its guards, and the argument for each — is in
@@ -247,7 +297,9 @@ The project's dominant task, and the one that touches the most files. In order:
    differs from `len(y_cols)`; add the row to the table above (the test requires it).
 5. **Sample**: add a dataset to `sample_data.py` leading with a category column, and a
    `_pick_*_sample` helper if the landing dataset can't drive it.
-6. **Wire**: add the selector in `streamlit_app.py` and any extra column widget, and
+6. **Wire**: add the selector in `streamlit_app.py`, a `vocabularies` row if the type reads a
+   column vocabulary other than `numeric_cols` (the row carries its Y source and both of its
+   messages, so this is the one edit a coordinate type cannot half-do), any extra column widget, and
    forward it through all three **renderer** cache wrappers **by keyword, under its own
    name** (and through `cached_count_marks` too, if `count_marks` reads it). A new
    kwarg also needs a row in the kwarg table above.
@@ -343,12 +395,18 @@ Why static, and why that test clears the caches on the way *out*:
 **Widget identity** is pinned the same way, and for the same reason — nothing else would
 notice its removal. Streamlit folds every command kwarg into a *keyless* widget's element id,
 the **label included**, so the X and Y pickers (whose labels vary by chart type while their
-options do not) carry a `key=` and would silently reset without one. Three AppTests hold that
-down: two that a selection survives a label-only chart-type switch (X, and Y), and one that a
-Dataset switch **reconciles** a stale Y instead of landing on the empty-Y guard. Note the two
-widget families differ and the code differs with them — `selectbox` *resets* an invalid stored
-value on its own (so X needs no reconciliation), while `multiselect`/`pills` *filter* theirs to
-`[]` (so Y does). Verify any change here by breaking it; all three mutations are one-liners.
+options do not) carry a `key=` and would silently reset without one. Four AppTests hold that
+down, over **three distinct failure modes**: two that a selection survives a label-only
+chart-type switch (X, and Y) — re-minting; one that a Dataset switch **reconciles** a stale Y
+instead of landing on the empty-Y guard — filtering; and one that a gate which `st.stop()`s
+*above* the pickers does not forget them — **garbage collection**, which a `key=` alone cannot
+fix, since Streamlit drops the stored value of any keyed widget a run never instantiates.
+`keep_picker_state()` (naming the three keys in `_KEYED_PICKERS`) re-assigns each entry to
+itself in front of such a stop, which is the documented opt-out; it reads like a no-op and is
+not one. Note the two widget families differ and the code differs with them — `selectbox`
+*resets* an invalid stored value on its own (so X needs no reconciliation), while
+`multiselect`/`pills` *filter* theirs to `[]` (so Y does). Verify any change here by breaking
+it; all four mutations are one-liners (the fourth: delete the `keep_picker_state()` call).
 
 ## Lint & format
 
@@ -467,16 +525,27 @@ conventions in their original, fully-enumerated form); the argument behind each 
   (and the builder's own comments, which carry the same claims):
 
   ```bash
-  grep -noE 'the (one|only) [a-zA-Z*`_.]+ [a-zA-Z*`_.]+' CLAUDE.md docs/chart-types.md
-  grep -noE 'the (first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)' \
+  grep -noE 'the [*_`]*(one|only)[*_`]* [a-zA-Z*`_.]+ [a-zA-Z*`_.]+' CLAUDE.md docs/chart-types.md
+  grep -noE 'the [*_`]*(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth)' \
       CLAUDE.md docs/chart-types.md
   ```
 
-  Check each hit against the code. The sweep catches **pre-existing** drift too, not only
-  what you just added — fix what it finds, not only what your diff caused. Note the second
-  regex is itself a tally that goes stale: each new type can push an ordinal past the end
-  of the alternation, so extend it rather than assuming it still covers the top of the
-  range.
+  The emphasis class before the claim word (``[*_`]*``) is load-bearing rather than
+  defensive: these docs **bold the very word the claim rests on** ("the **ninth** column
+  kwarg", "the **only** type whose marks are not in the data"), so without it both sweeps
+  skipped precisely the emphasized hits — the strongest claims in the file, and therefore
+  the ones most worth checking. Every real ordinal claim above `sixth` in
+  `docs/chart-types.md` — they cluster in the kwarg numbering, which is the one place a
+  high ordinal is *used* — was invisible to the sweep that was supposed to find it.
+
+  Check each hit against the code, and read the **paragraph** out from it rather than the
+  matched line: neither regex can match a stale *cardinal* or a stale *name*, and both of
+  the ones fixed in 0.20.0 were found sitting beside a hit rather than at one. The sweep catches
+  **pre-existing** drift too, not only what you just added — fix what it finds, not only
+  what your diff caused. Note the second regex is itself a tally that goes stale: each new
+  type can push an ordinal past the end of the alternation, so extend it rather than
+  assuming it still covers the top of the range (`eleventh` became reachable with the
+  gauge family's two policy kwargs, which sit above the nine column ones).
 
   Bare **cardinals** are deliberately *not* swept — the signal rate is far too low to
   survive being run by hand
@@ -519,6 +588,24 @@ conventions in their original, fully-enumerated form); the argument behind each 
   **empty** column sums to `0.0`, the additive **identity** — a confident claim of "the
   total is zero" where the truth is "there is no data" — so `_gauge_value` tests for empty
   **above** the reducer. Only `sum` lies, which makes it worse rather than better.
+- **Two string shapes the serializer emits UNQUOTED**, and both blank the **iframe** while the
+  **PNG renders perfectly** — an interactive-only divergence no options-dict test can see, so
+  assert on `to_js_literal()` output, never on the dict. (1) A value that opens `{`, closes `}`
+  and carries **at least as many colons as brace-pairs** is written as a bare JS object on **any
+  key and any axis** —
+  `{"format": "{value:%b %Y}"}` becomes `format: {value:%b %Y}`. It is a property of the VALUE:
+  `dataLabels.format` and a series `pointFormat` are **not** exempt, and timeline's tooltip is
+  safe only because it opens with `<b>` (the `{point.name}: {point.y}` pie, funnel and pyramid
+  share is safe only because it is one colon short of its two brace-pairs — add a `:.1f` and it
+  goes through bare). Swept by
+  `test_no_supported_type_emits_an_unquoted_format_object`, whose pattern is
+  `[A-Za-z]*[Ff]ormat:\s*\{` and must stay so: the literal `format: {` misses `pointFormat`.
+  (2) Any string beginning `Date`
+  except exactly `"Date"` is emitted as raw JS — a **library bug**, reachable from a chart title,
+  a column name or a point label, deliberately **not** worked around (every fix would mutate text
+  the user typed) and pinned as still-present by
+  `test_a_string_beginning_with_date_is_emitted_unquoted_by_the_library`
+  ([the reproduction and the trade](docs/decisions.md#the-strings-highcharts-core-emits-unquoted)).
 - **Never rely on a Highcharts default.** `build_chart_html` pins the chart's
   `color-scheme` to `only light` (`_LIGHT_COLOR_SCHEME_CSS`, on the `.highcharts-root`
   `<svg>`, **not** `html` —
@@ -527,7 +614,13 @@ conventions in their original, fully-enumerated form); the argument behind each 
   the project does *not* set would follow the **viewer's browser**. The export server
   already rasterizes with the light resolution, so this makes the two render modes agree
   and leaves `_themed` the single source of truth for the dark chrome. Anything a new chart
-  type wants themed must go through `build_options`.
+  type wants themed must go through `build_options`. The export server has defaults of its own,
+  and the same rule applies to them: the app passes `CHART_PNG_WIDTH = 800` to
+  `build_chart_png` because the server otherwise lays the chart out at **600px** and
+  `st.image(..., width="stretch")` then stretches that layout — so the two modes drew genuinely
+  different charts. Highcharts lays out text at the width it is given and **truncates** labels at
+  600 ("Incorporat"), which no amount of stretching undoes; it bites every type and bites hardest
+  where a label IS the mark's identity.
 - **Chart colors.** Theme via `highcharts_builder.DEFAULT_COLORS` (applied by
   `build_options` to every chart, so the iframe and PNG paths are themed too). It **is**
   `.streamlit/config.toml`'s `chartCategoricalColors`, copied by hand because no theme CSS

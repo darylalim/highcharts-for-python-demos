@@ -45,9 +45,10 @@ the charts are built to match it.
 - **One dark theme, end to end** — the app ships a single dark theme, and the charts
   are built to match it in both render modes: background, text, axes and tooltip all
   come from the same palette the Streamlit shell uses.
-- **KPI row** — rows, numeric columns, and a chart-type-adaptive third metric
-  (series plotted, or the mark count: cells, tiles, stages, flows, links, boxes,
-  steps, sectors, bars, or ranges).
+- **KPI row** — rows, numeric columns, and a chart-type-adaptive third metric:
+  series plotted, or — for the types whose single series draws many marks — that
+  mark count, named for what it counts (cells, tiles, stages, flows, boxes,
+  sectors, bars, ranges, measures, changes, events, and so on).
 - **See the config** — a toggle reveals the generated Highcharts config
   (`to_js_literal()` output).
 - **Consistent palette** — every series uses the brand palette (`DEFAULT_COLORS`),
@@ -74,19 +75,22 @@ the charts are built to match it.
 | `boxplot` | Per-category Tukey distributions from repeated observations | — |
 | `waterfall` | A cumulative bridge of signed deltas, with a closing Total bar | — |
 | `sunburst` | A hierarchy as concentric rings from a parent column and leaf values | Parent |
-| `xrange` | A Gantt-style timeline; bars span Start→End on named lanes (dates or numbers) | End |
+| `xrange` | A Gantt-style schedule; bars span Start→End on named lanes (dates or numbers) | End |
 | `columnrange` | Floating bars, each spanning a Low→High per category (a min–max range) | High |
 | `arearange` | A continuous filled band spanning a Low→High per category (columnrange's area mirror) | High |
 | `bullet` | A KPI strip: a Measure bar read against a Goal crossbar, one pair per category | Goal |
 | `variwide` | Columns whose Width is a second magnitude, so each bar's *area* is the reading | Width |
 | `dumbbell` | Two markers per category joined by a connector: a Before and an After | After |
+| `timeline` | Dated events on one spine: an Event name and a Date, one marker per instant | — (Y is the date) |
 | `solidgauge` | An activity gauge: each column reduced to one reading, drawn as an arc | Aggregation, Dial (no X) |
 | `gauge` | A needle per column on a drawn tick scale | Aggregation, Dial (no X) |
 
 The gauge family (`solidgauge`, `gauge`) is the only pair with no label column —
 each *selected* column becomes one mark, reduced to a single reading by the
 aggregation you pick (sum / mean / median / min / max / last). `networkgraph` is
-its mirror: edges with no value column. See
+its mirror: edges with no value column. `timeline` needs no extra input because
+its Y column *is* the date — an event's name and the moment it happened are the
+whole of the data, so the picker offers date columns only. See
 [`docs/chart-types.md`](docs/chart-types.md) for the per-chart design notes.
 
 ## Development

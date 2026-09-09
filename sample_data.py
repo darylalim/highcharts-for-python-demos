@@ -516,9 +516,12 @@ def _release_plan() -> pd.DataFrame:
 
     Tailored to xrange, and to nothing else in this file, on four counts:
 
-    * It is the only sample whose value columns are COORDINATES rather than magnitudes. Every
-      other dataset answers "how much"; these two answer "when". So it is also the only one
-      carrying DATES, and they are written as ISO-8601 *strings* on purpose: that is what
+    * Its value columns are COORDINATES rather than magnitudes — where most datasets here
+      answer "how much", these two answer "when". It shares that with exactly one other sample,
+      and the pair is a deliberate mirror: ``_company_milestones`` carries ONE date per row and
+      means an INSTANT, these two carry a pair and mean an INTERVAL. (This note read "the only
+      sample" until that mirror arrived.) The dates are written as ISO-8601 *strings* on
+      purpose: that is what
       ``pd.read_csv`` hands back for a date column, so the sample exercises the real
       ``_coordinates`` sniff (an object column parsed to a datetime axis) rather than a
       pre-parsed ``datetime64`` a CSV upload would never produce.
@@ -861,6 +864,59 @@ def _market_share_shift() -> pd.DataFrame:
     )
 
 
+def _company_milestones() -> pd.DataFrame:
+    """A young company's first year as INSTANTS — one row per dated event, each a moment rather
+    than a span.
+
+    Tailored to timeline, and it is best read directly against ``_release_plan``, which is its
+    mirror rather than its neighbour: both carry dates and neither carries a magnitude in its
+    value slot, but a release plan's rows have EXTENT (a start and an end, so the mark is a bar)
+    while these have none (one date, so the mark is a point). That is the whole difference
+    between the two types, and reading the two samples side by side is what shows it is a
+    difference in the DATA and not merely in the drawing. Four things are deliberate:
+
+    * The date column carries ISO-8601 *strings*, ``_release_plan``'s reason exactly: that is
+      what ``pd.read_csv`` hands back, so the sample exercises the real ``_coordinates`` sniff
+      (an object column parsed to a datetime axis) rather than a pre-parsed ``datetime64`` no
+      CSV upload would ever produce.
+    * The gaps are IRREGULAR — six weeks, then two, ten, six, fourteen, six — because a
+      timeline's whole claim is that distance on the page is distance in time. Evenly spaced
+      events would draw the same chart a category axis draws, and would hide the one thing
+      worth checking by eye.
+    * It leads with the event NAME, the file's category-column-first rule, and here that rule
+      is load-bearing twice over: the name is also the mark's entire identity (a timeline has
+      no axis categories and no legend), so a frame whose first column were the date would draw
+      a chart labelled with dates in both channels.
+    * ``headcount`` is a genuine numeric column, so the dataset stays usable by the other chart
+      types and the app's no-numeric-columns gate has something to find. It shares its NAME with
+      ``_release_plan``'s spare column on purpose — the two samples differ in their coordinate
+      shape and in nothing else, which is the comparison they exist to support.
+    """
+    return pd.DataFrame(
+        {
+            "milestone": [
+                "Incorporated",
+                "Seed round",
+                "First hire",
+                "Private beta",
+                "Public launch",
+                "Series A",
+                "1,000th customer",
+            ],
+            "date": [
+                "2026-01-12",
+                "2026-02-23",  # +6 weeks
+                "2026-03-09",  # +2 weeks: the tightest pair, so the labels must stagger
+                "2026-05-18",  # +10 weeks
+                "2026-06-29",  # +6 weeks
+                "2026-10-05",  # +14 weeks: the widest gap, and the axis has to show it
+                "2026-11-16",  # +6 weeks
+            ],
+            "headcount": [2, 3, 5, 9, 14, 26, 34],
+        }
+    )
+
+
 def _weekly_bookings() -> pd.DataFrame:
     """Weekly bookings by sales region — four teams, eight weeks of observations.
 
@@ -1049,6 +1105,7 @@ SAMPLES = {
     "Quarterly sales vs quota (bullet)": _sales_vs_quota,
     "Product line margin by revenue (variwide)": _product_line_margin,
     "Market share shift by region (dumbbell)": _market_share_shift,
+    "Company milestones (timeline)": _company_milestones,
     "Weekly bookings by region (solidgauge)": _weekly_bookings,
     "Server utilization (gauge)": _server_utilization,
 }

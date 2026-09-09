@@ -18,11 +18,14 @@ entry exists because a rule elsewhere looks arbitrary without it.
 [Permissions: why each deny rule is spelled the way it is](#permissions-why-each-deny-rule-is-spelled-the-way-it-is) ·
 [Prose drift: why cardinals are not swept](#prose-drift-why-cardinals-are-not-swept) ·
 [The cache layer that nothing executed](#the-cache-layer-that-nothing-executed) ·
+[Keyed widgets: the third way a picker loses its answer](#keyed-widgets-the-third-way-a-picker-loses-its-answer) ·
 [Light mode, and its removal](#light-mode-and-its-removal) ·
 [The bullet goal that must be `None`](#the-bullet-goal-that-must-be-none) ·
 [Row-less frames: three ways a non-boolean mask breaks](#row-less-frames-three-ways-a-non-boolean-mask-breaks) ·
 [`color-scheme`: why the pin sits on the SVG](#color-scheme-why-the-pin-sits-on-the-svg) ·
-[Palette: the scale that was a palette by accident](#palette-the-scale-that-was-a-palette-by-accident)
+[Palette: the scale that was a palette by accident](#palette-the-scale-that-was-a-palette-by-accident) ·
+[The strings highcharts-core emits unquoted](#the-strings-highcharts-core-emits-unquoted) ·
+[Tooltip precision: when a channel is a value's only home](#tooltip-precision-when-a-channel-is-a-values-only-home)
 
 ## Packaging: the fact with no second home
 
@@ -166,6 +169,58 @@ That dynamic test clears the `@st.cache_data` caches on the way **out** as well 
 `monkeypatch` restores the function but not the cached *value*, so a stand-in PNG left
 behind would be served to any later Static PNG render — which would then pass **without
 calling the builder at all**, reintroducing the exact vacuity the test was written to end.
+
+## Keyed widgets: the third way a picker loses its answer
+
+The X picker and the multi-select Y picker carry a `key=` because their **labels** vary by chart
+type ("Category (X) axis" against "Event labels"; "Series (Y) — one or more" against
+"Rings (Y) — one or more") while their options do not, and Streamlit folds every command kwarg —
+the label included — into a *keyless* widget's element id. Without a key, a relabel re-mints the
+widget and discards a selection that was still entirely valid. (The single-select Y — drawn for every type that takes one
+value column, xrange and timeline included — is keyless, which is why `_KEYED_PICKERS` names three
+keys and not four: `x_col` plus the pills/multiselect pair, which are one control under two
+commands.)
+
+The key fixes that one failure, and there are **three**, which is the whole content of this
+entry. They are worth enumerating because each has a different cause and a different fix, and
+two of them look like the first:
+
+1. **Re-minting.** A label-only change gives a keyless widget a new identity, so the answer is
+   gone. Fixed by the `key=` itself. Pinned by the two label-only-switch AppTests.
+2. **Filtering.** `multiselect` and `pills` do *not* reset a stored value that is no longer a
+   valid option, they filter it to `[]` — so a Dataset switch lands the page on the empty-Y
+   guard where the keyless version drew a chart. `selectbox` behaves differently and *resets*,
+   which is why only Y carries the reconciliation seed. Pinned by
+   `test_app_dataset_switch_reconciles_a_stale_y_selection`.
+3. **Garbage collection.** Streamlit discards the session-state entry of any keyed widget a run
+   does not **instantiate**. The key survives a rerun; it does not survive a run that never
+   reaches the widget. So an early `st.stop()` above the pickers silently forgets them — the
+   exact degradation the keys exist to prevent, arriving down a path the key cannot defend.
+
+The third was **measured**, not deduced. On the landing dataset: choose X = `cost`, switch to
+`timeline` (that frame has no date column, so the vocabulary gate errors and stops), switch back
+to `line` — and X comes back at `month`. After `keep_picker_state()`, it comes back at `cost`.
+
+Two things about that measurement are worth keeping. First, it **predates timeline**: xrange's
+gate has always stopped above the same two pickers, so this release did not introduce the shape —
+the failure has been live since the pickers were **keyed** in `0.18.1`, a keyless widget having
+no stored entry to collect. What timeline changed is *reachability*: a frame with no coordinate
+column at all is an unusual upload, while a frame with no date column is the app's own landing
+dataset, two clicks from a cold start. A latent bug and an everyday
+one differ only in the data, which is an argument for fixing the shape rather than the case.
+Second, the fix is a **re-assignment of each entry to itself** (`st.session_state[k] =
+st.session_state[k]`), the documented way to opt a key out of that cleanup. It reads as a no-op,
+so it lives in a named function with the measurement attached rather than inline at the call
+site — an inline no-op is what a later "simplification" deletes.
+
+The rule for the next early stop: **a `st.stop()` above a keyed widget is a state deletion, not
+a control-flow choice.** It is not hypothetical elsewhere in this file either — the
+no-CSV-uploaded `st.info(...)` + `st.stop()` further up the sidebar has the identical shape, and
+measured the same way (X = `cost`, switch Source to Upload CSV, switch back) it still returns
+`month`. That one is left alone deliberately: the user is replacing the frame, so forgetting a
+column chosen against the old one is a defensible answer rather than a loss. The distinction to
+carry forward is whether the stop means *"this data cannot do that"* — where the selection is
+still about the frame in hand and must survive — or *"there is no data yet"*.
 
 ## Light mode, and its removal
 
@@ -332,3 +387,204 @@ the two 3:1 luminance ranges do not overlap. It therefore carries a **fill plus 
 one value per surface. The testing lesson is the durable part: a mark whose legibility is
 a property of a **pair** needs its test written over the pair. A per-path hex assertion
 cannot see the defect, and did not.
+
+## The strings highcharts-core emits unquoted
+
+`to_js_literal` writes some Python strings into the emitted JavaScript **without quotes**.
+When it does, the chart call is not valid JavaScript at all: the browser throws a
+`SyntaxError` and the iframe renders blank — while the Static PNG comes back **perfect**,
+because the export path never touches this code at all: `headless_export` builds its
+payload from `options.to_json()`, where a string is a JSON string and the question of
+quoting does not arise. So the two render modes disagree and only the interactive one is
+wrong, which is the class of bug `_LIGHT_COLOR_SCHEME_CSS` exists to close, arriving
+through a completely different door.
+No assertion over an options dict can see either of the two cases below; both are only
+visible in `Chart.to_js_literal()` output.
+
+**Case one: a format string that looks like an object.** A string that opens with `{` and
+closes with `}` is handed to `js_literal_functions.is_js_object`, which calls it a JavaScript
+object literal — and writes it through bare — when it carries **at least as many colons as
+brace-pairs**. That is the real predicate, read off the source and confirmed by round-trip, and
+it is not "a `:` between the braces": a string that has a colon but too few of them falls
+through to the library's `esprima` path, which parses `const testName = <the string>` and
+returns `False` on anything that is not an `ObjectExpression`. One pair and one colon is the
+common case, and the trap. (With **no** colon at all there are three further bare paths, all
+verified by round-trip: braces enclosing nothing but whitespace, the substring `new ` anywhere in
+the string, and the substring `Object.create(`. So `{point.name} new value {point.y}` is emitted
+bare — worth knowing before anyone concludes that a colon is the thing to avoid. None is reachable
+today, and for a reason worth keeping true: every format this module builds that both opens `{` and
+closes `}` is a fixed token string with no column name interpolated into it, and every format that
+does interpolate one ends in markup or a bare word instead — checked across all 30 types.)
+
+```text
+xAxis.labels.format = "{value:%b %Y}"                    ->  format: {value:%b %Y}
+xAxis.labels.format = "{value}"                          ->  format: '{value}'
+dataLabels.format   = "{point.y:.1f}"                    ->  format: {point.y:.1f}
+dataLabels.format   = "{point.name}"                     ->  format: '{point.name}'
+tooltip.pointFormat = "{point.x:%Y-%m-%d}"               ->  pointFormat: {point.x:%Y-%m-%d}
+tooltip.pointFormat = "<b>{point.name}</b><br/>{point.x:%Y-%m-%d}"  ->  quoted
+dataLabels.format   = "{point.name}: {point.y}"          ->  quoted   (2 pairs, 1 colon)
+dataLabels.format   = "{point.name}: {point.y:.1f}"      ->  format: {point.name}: {point.y:.1f}
+```
+
+The rule is a property of the **value**, on **any key and any axis**. This is worth
+stating loudly because the project got it wrong in the other direction first: the trap was
+found on `xAxis.labels.format` and written up as a fact about that key, with `dataLabels`'
+and the series tooltip's `format`/`pointFormat` explicitly *cleared* as "quoted
+correctly" — a clearance the table above shows is false for exactly the values that break.
+`timeline`'s tooltip is safe only because it opens with `<b>`; an edit that "simplified" it
+by dropping the markup would have blanked the chart, and the prose would have said the edit
+was fine. The `{point.name}: {point.y}` that pie, funnel and pyramid all share is the
+ILLUSTRATION of the counting rule rather than an
+exception to it: it opens and closes with braces and carries a colon, and survives on the
+arithmetic alone — two brace-pairs against one colon, so `is_js_object` falls through to its
+`esprima` path, which refuses to parse it. It escapes by **one colon**, and that is a live margin
+rather than a comfortable one: `{point.name}: {point.y:.1f}`, the same format with a precision
+added and the most ordinary edit anyone would make to it, is two colons against two pairs and goes
+straight through bare (round-tripped, last row of the table above).
+`test_no_supported_type_emits_an_unquoted_format_object` was written value-shaped from the
+start: it greps every supported type's emitted JS with `[A-Za-z]*[Ff]ormat:\s*\{`, and the
+optional prefix and the capital `F` are the point of the pattern rather than tidiness — the key
+this module emits on nearly every tooltip is `pointFormat`, which the literal `format: {` does
+not match at all. So only the prose
+needed correcting — which is the argument for testing the **serializer's output** rather
+than the module's intentions, and a standing warning against "simplifying" that regex to match a
+prose paraphrase of it, which would reopen exactly the tooltip case this paragraph is about.
+
+**Case two: any string beginning `Date`.** This one is a library bug, not a rule this
+module can follow its way around. `highcharts_core/js_literal_functions.py:374` (the pinned
+1.11.0) serializes a bare string with the following — quoted verbatim, which is why the
+fence below says `text` rather than `python`: the format gate reaches ```python fences in
+Markdown, and it must not restyle someone else's source out from under a line number:
+
+```text
+if (item.startswith('[') or item.startswith('Date')) and item != 'Date':
+    as_str += f"""{item}"""      # emitted UNQUOTED
+```
+
+The intent is plainly to pass `Date.UTC(...)` and `[...]` expressions through as code. The
+effect is that **any** string beginning `Date`, except exactly `"Date"`, reaches the page
+as raw JavaScript. It is reachable from three ordinary channels, each verified against the
+pinned `highcharts-core` (1.11.0):
+
+```text
+chart title   "Dates that mattered"  ->  text: Dates that mattered
+column name   "Date added"           ->  name: Date added,   (and an axis title)
+event name    "Dates finalised"      ->  name: Dates finalised
+```
+
+It is **case-sensitive**, so `date added` is safe and `Date added` is not, and the exact
+string `"Date"` is spared by the `item != 'Date'` clause — so a column named `Date` draws
+fine while `Dates` does not, which is not a distinction anyone will guess. It is
+pre-existing and affects **all 30 chart types** — the title is a free-text box and a column
+name comes from the user's CSV — but `timeline` raises the exposure sharply, because its
+required column is semantically a date and `Dates`, `Date added` and `DateTime` are all
+natural headers. (`sample_data`'s milestone dataset spells its column lowercase, which is
+what keeps the shipped sample out of it.)
+
+**Why it is documented rather than worked around.** Every available fix mutates text the
+**user typed**. Quoting it ourselves is not available — the module hands `Chart.from_options`
+a dict and the library owns the serialization — so the workaround would have to change the
+string: prefix it, rename the column, or slip in a zero-width space to defeat the
+`startswith` test. That last one is the tempting one and it is the worst: the space is
+invisible in the emitted JS, so it would silently reach the DOM, the axis title, the
+tooltip, the PNG and anything a user copies out of them, to defeat a prefix check. A chart
+that quietly retitles itself is a worse failure than a chart that does not draw, and it
+would also be *permanent*, outliving the upstream fix by however long nobody noticed.
+Renaming a user's column is the same offence with a plainer face. So the trade taken is:
+**live with the bug, and pin it.**
+
+`test_a_string_beginning_with_date_is_emitted_unquoted_by_the_library` therefore asserts
+the bug is **still there**, not that it is fixed. That is the only mechanism by which a
+repo that chose to live with something learns that the thing changed: fixed upstream, the
+test fails and this section comes out; widened upstream, it fails too. It is the same
+"pin the library's behaviour, not our hope for it" move as the silent-drop tests
+(sankey's `nodeFormat`, boxplot's `fillColor`, the gauge pane's `size`), pointed at a
+serializer instead of a validator.
+
+The general rule that falls out, and the reason this sits in a decisions file rather than
+in a comment: **a trap in the serializer belongs to every type, including the ones not yet
+written.** Sweep it over `SUPPORTED_TYPES` and assert on the emitted JS, never on the
+options dict, and never on the key you happened to hit it through.
+
+## Tooltip precision: when a channel is a value's only home
+
+`timeline`'s tooltip printed a fixed `{point.x:%Y-%m-%d}`. `date_columns` accepts an ISO-8601
+column with a **clock time** in it — nothing about `2026-01-12T09:30:00Z` fails the date sniff,
+and nothing should — so a deploy log with a start at 09:30 and an end at 17:45 drew two marks at
+two distinct coordinates, correctly placed, whose tooltips both read `2026-01-12`. The only
+channel that could tell them apart said they were the same thing.
+
+What makes that a defect rather than a rounding is **where else the value appears, which for
+this type is nowhere**. A timeline's ticks are months, its marks are points with no extent, its
+dataLabels carry the event's *name*, and it has no axis categories and no legend. Most types
+state a value more than once — an axis tick, a dataLabel, a category — so a tooltip there is a
+convenience, and the handful that do not (bubble's size, variwide's width) get off lightly for a
+reason given below. Here the tooltip is the value's only home, and the general rule is the one
+this entry is named for: **a channel that is the only home for a value must follow that value's
+granularity, because there is no second reading to correct it.** The check is mechanical — for
+each value the chart claims to state, count the channels that state it; at one, formatting stops
+being cosmetic.
+
+Dates are where this bites first, and the reason is worth keeping: a number reaches a tooltip as
+itself, while a date reaches it as the **output of a format string** — and a format string is
+exactly the place granularity gets thrown away. So the same trap does not lurk in `bubble`'s
+`{point.z}` or `variwide`'s width, which are also tooltip-only and also unrepeated elsewhere: no
+format string, no decision, nothing discarded.
+
+**The mechanism.** `_timeline_events` now returns a **3-tuple** — `(points, sub_day, problem)`,
+`_xrange_bars`' 4-tuple precedent — and `build_options` picks `_TIMELINE_INSTANT`
+(`%Y-%m-%d %H:%M`) or `_TIMELINE_DAY` (`%Y-%m-%d`) from it. `sub_day` is returned rather than
+derived by the caller because it is a **column**-level fact about the coerced values, and the
+caller holds only the point dicts, whose `x` is typed `object`. It is computed as
+`any(when % _MILLIS_PER_DAY for when, _ in events)`: a date parses to exact midnight UTC, so a
+non-zero remainder *is* a time — arithmetic on values already coerced, not a second parse of the
+strings. Measured on the round-trip:
+
+```text
+["2026-01-05", "2026-02-23"]                    -> {point.x:%Y-%m-%d}
+["2026-01-05T00:00:00Z", ...]                   -> {point.x:%Y-%m-%d}
+["2026-01-05T00:00:00+05:30", ...]              -> {point.x:%Y-%m-%d %H:%M}
+["2026-01-12T09:30:00Z", "2026-01-12T17:45:00Z"] -> {point.x:%Y-%m-%d %H:%M}
+["2026-01-05", "2026-02-23T17:45:00Z"]          -> {point.x:%Y-%m-%d %H:%M}
+```
+
+Two of those rows are the decision rather than a side effect. The **offset** row reads as an
+instant because the question is asked in **UTC**, the frame the marks are actually placed in —
+local midnight in `+05:30` is 18:30 the day before on the axis, so a tooltip saying only the
+date would name a day the mark is not drawn on. And the **mixed** row widens *every* tooltip,
+because `pointFormat` is one string per series: the choice is a column policy, not a per-point
+one, and a column with any instant in it is a column whose readings are instants.
+
+**Why not widen unconditionally**, which is the one-line version of this fix and the wrong trade
+the other way: a milestone list is the type's commonest input and every one of its tooltips
+would then trail a meaningless ` 00:00` — noise on the majority case to serve the minority, and
+noise that *looks* like data, since a reader has no way to tell a real midnight from a padded
+one. Both directions lose information; only one loses it on the rows that have it.
+
+Two smaller notes. The formats are **named constants**, not literals inside an f-string, because
+the pair is a choice and a choice with two spellings in two branches is how they drift apart.
+And both are interpolated into a `pointFormat` that opens with `<b>`, which is what keeps the
+widened one out of the unquoted-object trap above — a value that opened `{` and carried two
+colons against two brace-pairs would serialize bare and blank the iframe, and
+`%Y-%m-%d %H:%M` adds exactly one more colon to a string that is already close to the margin.
+
+**Where the rule points next, and is not yet followed.** `xrange` is the same shape one type
+over, and saying so is the point of writing the rule down rather than the branch. Its span
+format already switches — but on the **axis kind**, dates against numbers, never on granularity —
+so two same-day tasks, `09:30 → 17:45` and `18:00 → 19:00`, both come back as
+`2026-01-12 → 2026-01-12` (round-tripped through `build_options`). That is worse than coarse: two
+identical dates is precisely how a **milestone** reads, the zero-length span xrange deliberately
+floors to a visible sliver, so the tooltip does not merely lose the hours, it states a different
+kind of event. It is left alone here for reasons of scope rather than of principle — the exposure
+is lower, since an xrange's two ends land on a real ticked axis (its own entry's argument for
+printing nothing in the mark) where a timeline point sits between month ticks, and the fix would
+change a shipped type's tooltip. The rule identifies the case; this release does not close it.
+
+Last, the **way it was found**, which is the transferable part. This type had been verified by
+rendering repeatedly — the spine hue, the sorted order, the dataLabel stagger, the 600px
+truncation were all decided by looking at pictures. None of those pictures could have shown
+this, because every frame rendered had day granularity: rendering only ever checks the data you
+rendered. It took a **review** asking what `date_columns` admits that the samples do not. When a
+picker is deliberately widened past the shipped samples — as this one is, to `_COORD_EMPTY` and
+to full ISO-8601 — the admitted-but-never-rendered cases are exactly where the next defect is.
