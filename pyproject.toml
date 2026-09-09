@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "highcharts-studio"
-version = "0.19.0"
+version = "0.20.0"
 description = "Streamlit application for building data visualizations with Highcharts."
 # SPDX expression (PEP 639). Covers this project's own code only; the Highcharts
 # JS/export server and the highcharts-core wrapper are proprietary and

@@ -234,8 +234,10 @@ BULLET_TYPES = ("bullet",)  # a measure bar read against a goal crossbar, per ca
 # `_variwide_point`, where the render that forced it is written down. Prints NOTHING in the mark
 # and needs no gate constant — but NOT by xrange's premise, which is false here: an xrange's two
 # ends both land on a ticked axis, whereas a variwide's WIDTH lands on no readable axis at all (the
-# x axis carries variable-width category slots, not a scale). It is carried in the tooltip instead,
-# the one number in this module read only there. Pulls in `modules/variwide` from `chart.type`
+# x axis carries variable-width category slots, not a scale). It is carried in the tooltip instead
+# — which it shares with `bubble`'s `size_col`, the same `{point.z}` token on the same key, and
+# bubble predates this type by many releases; what differs is the MARK, a bar's width against a
+# marker's area. Pulls in `modules/variwide` from `chart.type`
 # alone and NOT `highcharts-more` — the plausible guess the round-trip corrects, as for columnrange,
 # funnel and bullet — and needs no _MODULE_LOAD_ORDER entry: variwide.js requires only `highcharts`.
 #
@@ -311,6 +313,17 @@ VARIWIDE_TYPES = ("variwide",)  # bars whose WIDTH is a second magnitude
 DUMBBELL_TYPES = (
     "dumbbell",
 )  # two markers per category, joined: a before and an after
+# A sequence of dated EVENTS — one instant per row on one shared spine. It is the second type
+# whose value slot holds a COORDINATE rather than a magnitude (xrange is the first), and the
+# family is named for the same reason every other one-member tuple here is: the app's Date picker
+# source, the builder's build branch, the `count_marks` rule and the `_themed` hook must all ask
+# ONE name. See `date_columns` for why that picker is narrower than xrange's — a timeline refuses
+# the numeric coordinate xrange accepts, because an instant placed on a linear axis is drawn as a
+# BAND (verified by rendering: five events at x = 1,2,3,5,8 came back as five wide slabs, two of
+# them abutting, with the axis ticks overprinted by the point names). Xrange means a duration and
+# says so with two coordinates; a timeline means an instant and has only one, so the axis has to
+# supply the scale the second coordinate would have.
+TIMELINE_TYPES = ("timeline",)
 # The GAUGE FAMILY: the two types with NO LABEL CHANNEL, whose marks are the SELECTED COLUMNS
 # themselves, each reduced to one number by `agg` and read against one dial. They differ only in
 # what a mark BECOMES — an arc swept from zero, or a needle pointed at a scale — and share
@@ -350,6 +363,7 @@ SUPPORTED_TYPES = (
     + BULLET_TYPES
     + VARIWIDE_TYPES
     + DUMBBELL_TYPES
+    + TIMELINE_TYPES
     + GAUGE_TYPES
 )
 
@@ -681,14 +695,21 @@ _BULLET_TARGET_COLOR = _DARK_CHROME[
     "text"
 ]  # the fill; the border below carries the bar half
 _BULLET_TARGET_BORDER_COLOR = _DARK_CHROME["bg"]
-# The crossbar's DARK-mode border, and the reason it needs one at all. In light mode the
-# near-black fill above clears both backgrounds it crosses (17.9:1 on white, 7.0:1 on the
-# bar). In dark mode it cannot: clearing 3:1 against the slate background needs a relative
-# luminance >= 0.25, and against the palette blue needs <= 0.087, so NO single value exists
-# — the hook's "cannot work in principle" is literally true once the numbers are run, and it
-# is not a matter of picking a better hue. A mark spanning two backgrounds needs two values,
-# which is what a fill plus a border is. The light fill keeps 16.3:1 on the background; this
-# border carries the bar half at 7.0:1.
+# The crossbar's border, and the reason the mark needs one at all. The crossbar is drawn at 140%
+# of the bar width, so it necessarily crosses TWO surfaces — the palette-blue bar and the slate
+# page — and no single value clears both. That is arithmetic rather than taste: to reach 3:1
+# against the background a colour needs relative luminance >= 0.126, and to reach 3:1 against
+# `DEFAULT_COLORS[0]` it needs <= 0.088, and that interval is empty (recomputed from the constants
+# rather than quoted). So the mark carries one value per surface, which is what a fill plus a
+# border is, and each covers precisely where the other fails:
+#
+#     fill   #f1f5f9  on the page 16.3:1   on the bar  2.3:1
+#     border #0f172a  on the page  1.0:1   on the bar  7.0:1
+#
+# Nothing here is flipped by mode and nothing here ever was in this file's lifetime: `_themed` has
+# no bullet hook. (This note used to open "The crossbar's DARK-mode border ... in light mode the
+# near-black fill", which was doubly fossil — the two-mode world went in 0.18.0, and the fill is
+# `_DARK_CHROME["text"]`, near-WHITE. Found by a docs audit, not by the suite.)
 #
 # A numeric key under `targetOptions` is exactly what the branch below warns about, so: this
 # is a module CONSTANT, never derived from a frame and never a column, so neither the
@@ -817,6 +838,36 @@ _XRANGE_MIN_POINT_LENGTH = 3
 # Bars are drawn at a fixed height rather than filling their lane, so a one-lane chart doesn't
 # render a single bar as a thick slab spanning the plot.
 _XRANGE_POINT_WIDTH = 20
+
+# Timeline's ONE column-level contradiction, and note what it is NOT: it is not xrange's
+# `_XRANGE_NOT_COORDINATE` with a word changed. That message refuses a column that is neither
+# dates nor numbers; this one refuses a perfectly good NUMBER as well, because a timeline places
+# its marks on a TIME axis and a number cannot say when. So the two messages differ in what they
+# accept, not merely in what they name, and folding them together would widen timeline's rule to
+# xrange's by accident. Named here, next to its sibling, so the raise below and this module's own
+# `date_columns` docstring argue from one string (the `_SUNBURST_CYCLE` rule).
+#
+# It has no `explain_*` twin, and that absence is the design rather than a gap: `date_columns`
+# narrows the app's Date picker to columns that already pass, so this is unreachable from the UI
+# and exists for the pure-API caller alone. Compare `explain_xrange_error`, which is needed
+# precisely because xrange's picker is `coordinate_columns` and CAN offer a losing column.
+# One day in epoch milliseconds, for the "did any instant carry a clock time?" test in
+# `_timeline_events`. A DATE parses to exact midnight UTC, so a non-zero remainder is a TIME —
+# arithmetic on the values already coerced, rather than a second parse of the strings.
+_MILLIS_PER_DAY = 86_400_000
+
+# The two tooltip precisions, picked per frame by `_timeline_events`' `sub_day`. Both are
+# Highcharts date-format strings, and both are interpolated into a `pointFormat` that OPENS with
+# `<b>` — which is what keeps them out of the unquoted-object trap: a value that opened `{` and
+# carried a colon would serialize as a bare JS object (see the branch's note).
+_TIMELINE_DAY = "%Y-%m-%d"
+_TIMELINE_INSTANT = "%Y-%m-%d %H:%M"
+
+_TIMELINE_NOT_A_DATE = (
+    "The {col!r} column doesn't read as dates, so it can't say WHEN an event happened. A "
+    "timeline needs real dates (ISO-8601, e.g. 2026-01-05); a plain number won't do — for "
+    "numeric spans, use an xrange."
+)
 
 # The GAUGE FAMILY has NO LABEL CHANNEL. Every other type names its marks from a column — a
 # slice, an axis category, a node, a box, a lane — but a gauge's marks are the SELECTED COLUMNS
@@ -1212,9 +1263,13 @@ def _themed(options: dict) -> dict:
         # The CONNECTOR lines are the dashes bridging each bar to the next, and they are
         # what makes a waterfall read as a running total rather than a row of floating bars
         # — so they must stay legible. At #333333 on the dark background they survive, but
-        # only barely; lift them to the color the real axis lines take. This half has no
-        # precedent among the other types: it is the only line Highcharts draws *between*
-        # marks.
+        # only barely; lift them to the color the real axis lines take. It is the only line in
+        # this module drawn between two SEPARATE marks — which is the scoping that makes the
+        # claim survive: a dumbbell's connector joins the two ends of ONE point (there the
+        # connector IS the mark, and Highcharts already draws it in the series hue, so it needs
+        # no write of its own), and a timeline's spine is a line its marks sit ON rather than one
+        # drawn between them. The unscoped version of this sentence was false from the day
+        # dumbbell landed, two releases before anyone noticed.
         waterfall["lineColor"] = t["axis"]
         # The bar hues (up/down/sum) need no flip: like the shared series palette, they
         # read against both backgrounds, and their meaning is fixed (see the constants).
@@ -1227,6 +1282,43 @@ def _themed(options: dict) -> dict:
         # background (the treemap rule, not pie's), and the branch hues and the root's slate
         # read on both backgrounds like the shared palette.
         options["plotOptions"]["sunburst"]["borderColor"] = t["bg"]
+    if options["chart"].get("type") in TIMELINE_TYPES:
+        # Its OWN branch, and deliberately NOT a seventh entry in the bar-family tuple above —
+        # which is where a "consistency" edit would put it, since that tuple is what dissolves a
+        # mark's border everywhere else. That hook writes `plotOptions[type]["borderColor"]`, and
+        # `borderColor` is one of the keys highcharts-core silently DROPS for timeline, so joining
+        # the tuple would be a hook that looks right and sets nothing — and would still pass a
+        # test asserting `_DARK_CHROME["bg"]` appears in the JS, because `_themed` writes that hex
+        # on every chart it touches. That is this repo's own dark-mode-test hole, one type over.
+        # The tuple stays at six.
+        #
+        # Three writes, all MEASURED off rendered PNGs rather than inferred from the line-series
+        # base class (waterfall is the standing proof that inference is unsound here):
+        timeline = options["plotOptions"]["timeline"]
+        # 1. The SPINE. Reachable only through the series `color`, and only while `colorByPoint`
+        #    is off with each point already seeded — see the precondition in `build_options`,
+        #    which is the other half of this hook. Measured: 2,703 px of #cccccc -> 0.
+        timeline["color"] = t["axis"]
+        # 2. The 2px ring Highcharts draws around every event marker defaults to the background
+        #    var, which the `color-scheme` pin holds at WHITE in both themes — column/bar's case
+        #    exactly, arriving through a different element. Dissolve it into the dark background.
+        timeline["marker"] = {**timeline.get("marker", {}), "lineColor": t["bg"]}
+        # 3. The dataLabel CARD. A timeline's labels sit on the chart background rather than on a
+        #    fill, so they are pie's and funnel's case, not treemap's `contrast`: unthemed they
+        #    are white cards with #999999 borders and #333333 text, floating light on navy. Note
+        #    it writes COLOURS ONLY — a `format` here would replace Highcharts' own formatter and
+        #    cost the colour bullet and the bold name (see the build branch).
+        timeline["dataLabels"] = {
+            **timeline.get("dataLabels", {}),
+            "backgroundColor": t["bg"],
+            "borderColor": t["axis"],
+            "color": t["text"],
+        }
+        # The CONNECTOR joining a label to its mark is deliberately untouched, and that it needs
+        # no write is LUCK worth recording rather than a decision: it defaults to the POINT's own
+        # colour, so it comes out a DEFAULT_COLORS hue and reads on navy. `connectorColor` is
+        # dropped at both plotOptions and point level, so had the default been a neutral grey
+        # there would have been no fix available at all.
     if isinstance(options.get("subtitle"), dict):
         # Beside the title line above. Gauge is the first type to carry a subtitle; any future
         # one gets this for free.
@@ -2347,6 +2439,147 @@ def _xrange_bars(
     return points, lanes, _COORD_DATE in kinds, None
 
 
+def _timeline_events(
+    df: pd.DataFrame, x_col: str, date_col: str
+) -> tuple[list[dict[str, object]], bool, str | None]:
+    """Assemble a frame into a timeline's events: ``(points, sub_day, problem)``.
+
+    ``sub_day`` says whether any surviving instant carries a TIME OF DAY, and it is returned
+    rather than derived by the caller for ``_xrange_bars``' reason: it is a COLUMN-level fact
+    about the coerced values, and the caller holds only the point dicts, whose ``x`` is typed
+    ``object``. It exists because the tooltip is the ONLY place a timeline states the instant —
+    the ticks are months and the marks are points — so a format that prints days would collapse
+    two events on one date into one indistinguishable reading. Found by review: ``date_columns``
+    accepts an ISO-8601 column with a time in it, and both marks placed correctly while both
+    tooltips said the same thing.
+
+    The WHOLE build, shared by ``build_options`` and ``count_marks`` — ``_sunburst_tree``'s
+    contract and ``_xrange_bars``' reasoning, which is the one that applies here. A row's
+    survival really does look per-row (its own name, its own date), so a timeline appears to
+    belong with treemap/sankey on the shared-predicate mask path. It does not, for xrange's
+    reason exactly: whether the date column IS a date column is a COLUMN-level fact, decided
+    once by ``_coordinates`` over the whole column. A ``count_marks`` that reused only
+    ``_plottable`` would decide that fact separately from the chart and could answer differently.
+    Reusing the build makes the drift unrepresentable: the KPI is ``len(points)`` by construction.
+
+    ``_label_ok`` is applied HERE, and — unlike ``_sunburst_tree``'s and ``_xrange_bars``' copies
+    of that contract — no caller ever pre-applies it. One that did would hand this function a
+    frame some other column had already shortened, which is precisely the arrangement the sniff
+    below refuses; the idempotence those two rely on is not a licence to do it here.
+
+    BOTH callers hand this function the RAW frame, unlike sunburst's and xrange's, whose
+    ``build_options`` callers pass the ``_label_ok``-filtered one. That is deliberate and it is
+    load-bearing: the timeline branch returns ABOVE the shared filter for exactly this reason, so
+    that the column this sniffs is the column ``date_columns`` sniffed. See the inline note on the
+    sniff below for the bug that bought that arrangement.
+
+    ``problem`` is RETURNED, never raised, for the reason it is returned in the other two: the
+    app's KPI row runs ABOVE its guards, so a raise here would blow the page up with a traceback
+    before anything could explain it. Unlike those two it is also unreachable from the app (see
+    ``date_columns``), which makes it belt behind braces rather than the braces.
+
+    An EMPTY date column ABSTAINS rather than losing. ``_COORD_EMPTY`` is not a kind — it is the
+    absence of a claim (see the constant) — and a header-only CSV, or one whose dates are simply
+    unfilled, is missing data with a right answer: drop the rows, draw an empty chart. Refusing it
+    here would turn xrange's own reviewed bug back on one type over.
+
+    The missing-data policy is DROP THE ROW, and it is the library's decision rather than this
+    module's — the one type where that is true. ``EnforcedNull`` is unusable on both of a
+    timeline point's channels: in ``name`` it raises inside ``Chart.from_options`` (below
+    ``build_options``, the bullet-goal layer), and in ``x`` highcharts-core removes the key
+    entirely, whereupon Highcharts back-fills a date the frame never held — a mark that lies
+    rather than one that is missing. There is no keep-the-slot form to choose.
+    """
+    # `.astype(bool)`, the row-less cast: on a frame with no rows `.map()` has no values to infer
+    # a result dtype from and hands back a non-boolean Series, which pandas reads as a list of
+    # COLUMN NAMES rather than as a mask — which is the module's uniform convention, and here it
+    # is belt and braces rather than load-bearing: this mask is only ever consumed as
+    # `df.loc[keep, ...]` and `whens[keep]`, never as `df[mask]`, so the shape that kills a
+    # row-less frame cannot arise at this call site (verified by removing the cast: the suite
+    # stays green and a row-less frame still draws empty). The genuinely load-bearing instance is
+    # the SHARED filter in `build_options`, which really does index with `df[mask]`. Kept anyway,
+    # because a future edit that indexes with this mask directly would inherit the bug silently.
+    #
+    # Note also that BOTH of this function's callers hand it the RAW frame — the branch returns
+    # above that shared filter — so this is the only place a timeline's label mask is applied.
+    keep = df[x_col].map(_label_ok).astype(bool)
+    labels = df.loc[keep, x_col]
+    # The kind is sniffed over the WHOLE column and the survivors are indexed OUT of the result —
+    # the reverse of `_xrange_bars`, which coerces `df.loc[keep, ...]` so that a garbage cell on a
+    # label-dropped row can never sway the sniff. The inversion is deliberate and it is the whole
+    # of this type's guard story, so it is worth stating why the two differ.
+    #
+    # Xrange's pickers are `coordinate_columns`, which sniffs the RAW column — so xrange CAN be
+    # offered a column the builder then refuses, and it pays for that with `explain_xrange_error`
+    # and an app-side warning. Timeline's picker is `date_columns`, which also sniffs the RAW
+    # column, and this type's design claims its refusal is UNREACHABLE from the app. That claim is
+    # only true if the builder asks the PICKER'S question — and the picker's question is about the
+    # column, not about the rows some other column happened to keep.
+    #
+    # Sniffing the survivors made it FALSE, and not theoretically: a frame whose named rows are
+    # disproportionately non-dates flips the majority vote. `milestone = [nan, nan, "Public
+    # launch"]` beside `date = ["2026-01-12", "2026-02-23", "TBD"]` sniffs DATE whole (2 > 1) and
+    # NEITHER filtered (0 > 1), so `date_columns` offered the column and `build_options` raised on
+    # it — an uncaught traceback in place of the page. Found by review, not by the suite.
+    #
+    # Sniffing whole makes the kind independent of `x_col` ENTIRELY, and that is the property doing
+    # the work: two functions that read only `df[date_col]` cannot disagree about it, whatever the
+    # label column holds or which rows it drops. The row that provoked the flip is not swept under
+    # the rug either — "TBD" coerces to NaN and `_plottable` drops that event below, which is the
+    # honest reading: the column IS dates, and this one row's date is missing.
+    whens, kind = _coordinates(df[date_col])
+    if kind in (_COORD_NUMBER, _COORD_NEITHER):
+        return [], False, _TIMELINE_NOT_A_DATE.format(col=date_col)
+    whens = whens[keep]
+
+    # Accumulated as typed ``(when, name)`` PAIRS rather than as the point dicts themselves, for
+    # the sort below: a `list[dict[str, object]]` sorted on `point["x"]` keys off an `object`,
+    # which ty rejects and which only a suppression would quiet — and this module spends its
+    # suppressions on highcharts-core stub mismatches, never on its own code. The pair carries the
+    # float as a float, so the key needs no cast and no ignore.
+    events: list[tuple[float, str]] = []
+    for label, when in zip(labels.tolist(), whens.tolist(), strict=True):
+        if not _plottable(when):
+            continue
+        # `name` is the mark's WHOLE identity — a timeline has no axis category and no legend —
+        # and it must always be present: a point carrying only `x` collapses to the bare
+        # positional 1-array `[x]` (highcharts-core exposes exactly one supported dimension for
+        # this type), and Highcharts then names it the literal string "Event".
+        #
+        # `_node_key`, not a bare `str()`: a name column holding one blank cell is widened to
+        # float64 by pandas, and `str()` would then label event 1 as "1.0" — xrange's lane rule,
+        # cosmetic here for xrange's reason (nothing has to MATCH) and taken for the same price.
+        events.append((float(when), _node_key(label)))
+    # Sorted by DATE, not left in row order, and this is the one place the type departs from the
+    # module's habit of drawing rows where the frame put them. Three things go wrong unsorted, and
+    # only the first is visible from Python:
+    #
+    #   * Highcharts logs warning #15 ("data input must be sorted") to the console on every render.
+    #   * The palette stops progressing. `build_options` seeds the hues by LIST POSITION, so on a
+    #     frame in CSV order the marks run green -> red -> amber left to right; a reader takes a
+    #     colour sequence along a time axis to mean something, and here it would mean the CSV.
+    #   * The dataLabel stagger breaks. Highcharts alternates above/below the spine by POINT
+    #     INDEX, so out-of-order rows put consecutive marks on the same side — three in a row,
+    #     rendered — and at any density the labels then overlap. That is the type's readability,
+    #     not a nicety: a timeline's label IS its mark's identity.
+    #
+    # It must happen HERE rather than in `build_options`, and before the hue seeding rather than
+    # after: seeding first and sorting second would carry the scrambled palette along with the
+    # points and fix only the warning. `sort` is STABLE, so two events on one date keep their row
+    # order — the frame's own answer to a question the dates cannot settle.
+    #
+    # Sorting cannot change WHERE a mark lands (an instant's position is its own coordinate, not
+    # its index — unlike a category axis, where order IS position), so this reorders the drawing
+    # and never the reading. `count_marks` counts what this returns, so it is untouched by it.
+    events.sort(key=lambda event: event[0])
+    # A midnight-UTC instant is an exact multiple of a day in epoch millis, so this asks "did any
+    # surviving row carry a clock time?" without re-parsing anything. `_epoch_millis` normalizes to
+    # UTC, so the question is asked in the frame the marks are placed in rather than in the
+    # reader's zone — which is the only way it can agree with what the axis draws.
+    sub_day = any(when % _MILLIS_PER_DAY for when, _name in events)
+    return [{"x": when, "name": name} for when, name in events], sub_day, None
+
+
 def _category_labels(df: pd.DataFrame, x_col: str) -> list[str]:
     """Coerce an x column to string category *labels* (Highcharts categories are
     labels, not values). Shared by the scatter/bubble non-numeric-x, heatmap, and
@@ -2564,6 +2797,18 @@ def build_options(
       hues mean the same thing whether the row rose or fell. Reuses ``_range_point`` (both ends
       required, else a kept tick with neither marker) WITHOUT joining ``MAGNITUDE_RANGE_TYPES``.
       Pulls in ``modules/dumbbell`` PLUS ``highcharts-more``, both from ``chart.type`` alone.
+    - ``timeline``: a sequence of dated EVENTS — one instant per row, drawn as one marker on one
+      shared spine. ``x_col`` names the event and the first ``y_cols`` column says WHEN, which
+      makes it the second type (after ``xrange``) whose value slot holds a COORDINATE rather
+      than a magnitude — and the first whose marks carry no magnitude anywhere, since an event
+      has no size. Unlike ``xrange`` the coordinate must be a DATE: an instant on a linear axis
+      is drawn as a band, so ``date_columns`` narrows the app's picker and the guard below is
+      unreachable from it. The missing-data policy is drop-the-row, and it is the LIBRARY's
+      decision rather than this module's — ``EnforcedNull`` raises in ``name`` and is stripped
+      out of ``x``, leaving no keep-the-slot form to choose (see ``_timeline_events``). Its
+      ``_themed`` hook is the module's first with a PRECONDITION in the build branch: the spine
+      is themable only because the branch pins ``colorByPoint`` off and seeds each point's hue.
+      Pulls in ``modules/timeline`` from ``chart.type`` alone, with no prerequisite.
     - ``solidgauge`` and ``gauge``: the GAUGE FAMILY, the two types with NO LABEL CHANNEL.
       ``x_col`` is unused (and is ``None``) because a gauge's marks are the SELECTED COLUMNS
       THEMSELVES: each ``y_cols`` column becomes one mark, showing that column REDUCED to a
@@ -2618,7 +2863,10 @@ def build_options(
     ``high_col`` is its low column, a ``bullet`` chart with no ``goal_col`` or whose ``goal_col``
     is its measure column, a ``variwide`` chart with no ``width_col`` or whose ``width_col`` is
     its value column, a ``dumbbell`` chart with no ``after_col`` or whose ``after_col`` is its
-    before column, a GAUGE-FAMILY chart with an unknown ``agg`` or a ``dial``
+    before column, a ``timeline`` chart whose date column does not read as dates (the ONE guard
+    here that no app path can reach — ``date_columns`` narrows the picker to columns that pass,
+    so it stands behind the pure-API caller alone, and needs no ``explain_*`` twin), a
+    GAUGE-FAMILY chart with an unknown ``agg`` or a ``dial``
     with no span (see ``explain_gauge_error``), or (for the types in
     ``X_IN_Y_GUARD_TYPES`` — the cartesian family, radar, heatmap, boxplot, waterfall, the
     magnitude-range pair, bullet, variwide and dumbbell) an ``x_col`` that is also one of the
@@ -3250,6 +3498,186 @@ def build_options(
     # `zip(..., strict=True)` and category/series builds in lockstep. Gauge returned ABOVE
     # this filter and is the one type it must never reach — it has no label channel, and
     # filtering rows out of an AGGREGATE changes a number rather than dropping a mark.
+    # Timeline returns ABOVE the shared `_label_ok` filter, with the gauge family, and for a
+    # related-but-distinct reason. Gauge is here because it has no label channel at all; timeline
+    # is here because it must hand `_timeline_events` the RAW frame — the same frame `count_marks`
+    # hands it — so that the column-kind sniff inside sees the same column `date_columns` did.
+    # Reached on the filtered frame instead, that sniff would run over a column some OTHER column
+    # had already shortened, and the picker's promise would be void (see `_timeline_events`).
+    # Nothing is lost by returning early: `_timeline_events` applies `_label_ok` itself — the
+    # `_sunburst_tree` SHAPE, not its contract, since here no caller pre-applies it — so the rows
+    # still drop, decided in one place instead of two.
+    if (
+        chart_type in TIMELINE_TYPES
+    ):  # dated events: one instant per row, on one shared spine
+        date_col = y_cols[0]
+        points, sub_day, problem = _timeline_events(df, x_col, date_col)
+        if problem:
+            # Raised from the very message `_timeline_events` RETURNS rather than one composed
+            # here, so the two cannot drift — the `_SUNBURST_CYCLE` / `_XRANGE_AXIS_MISMATCH`
+            # rule. Unlike those two it has no `explain_*` twin and no app-side warning, because
+            # the Date picker is sourced from `date_columns` and cannot offer a column that
+            # reaches this line: it is the belt behind that braces, for the pure-API caller.
+            raise ValueError(problem)
+
+        # PRECONDITION FOR THE `_themed` HOOK, and the module's first. Every other type's theme
+        # hook is self-contained; this one is split across two layers, so read them together or
+        # neither makes sense. The SPINE — the line every event sits on — is reachable only
+        # through the SERIES `color`, since `lineColor` is silently dropped for this type at both
+        # the plotOptions and the series level (verified by rendering: a series-level one came
+        # back byte-identical to setting nothing). But a series `color` reaches the spine only
+        # while `colorByPoint` is OFF, and turning it off paints every marker one hue unless each
+        # point already carries its own. So the two lines below are not about colour identity at
+        # all — they are what makes the spine themable. Three writes hold it up (these two plus
+        # `_themed`'s `color`), and each fails DIFFERENTLY, which is worth spelling out because an
+        # earlier version of this note said all of them revert the spine to #cccccc and only one
+        # does (measured on a 1000x420 PNG, then re-derived from the options dict):
+        #
+        #   drop `colorByPoint: False` -> it defaults back to True, Highcharts cycles `colors`
+        #       across the points and never paints the series colour on the spine: #cccccc
+        #       returns, 2,703 px of foreign light grey on the navy shell.
+        #   drop `_themed`'s `color`   -> the series falls back to `colors[0]`, so the spine comes
+        #       out palette BLUE. Themed-looking, wrong, and the failure a hex-substring test is
+        #       least able to see.
+        #   drop the seeding below     -> the spine stays slate, but every marker inherits the
+        #       series colour and the palette flattens to one hue.
+        #
+        # So all three are load-bearing and none is redundant; the hook in `_themed` says this from
+        # the other end. If you edit one, edit all three, and run all three mutations.
+        #
+        # `cycle` wraps a short custom palette rather than IndexError-ing (the
+        # `_BOXPLOT_OUTLIER_COLOR` concern); `or` keeps an EMPTY one from exhausting the first
+        # `next`. Sunburst's and xrange's seeding, verbatim.
+        hues = itertools.cycle(colors or DEFAULT_COLORS)
+        for point in points:
+            point["color"] = next(hues)
+
+        return _themed(
+            {
+                "chart": {"type": chart_type},
+                # Genuinely used, not carried for consistency: the events seed from it (pie's,
+                # treemap's, sunburst's and xrange's categorical use, not heatmap's).
+                "colors": colors,
+                "title": {"text": title},
+                # `type: "datetime"` IS the chart, not a formatting nicety. With it: small square
+                # markers on a hairline spine under a readable month axis. Without it, on the
+                # SAME epoch-millis array, Highcharts inflates every mark into a wide coloured
+                # BAND and prints raw 13-digit integers across the bottom (both rendered). It is
+                # unconditional because `_timeline_events` has already refused every column that
+                # is not a date — xrange's `if is_datetime` with the other half deleted, which is
+                # the whole of what `date_columns` buys.
+                #
+                # NO `labels.format` here, EVER, and this is the type most likely in the module
+                # to reach for one. highcharts-core emits `xAxis.labels.format` UNQUOTED:
+                # `{"format": "{value:%b %Y}"}` serializes as `format: {value:%b %Y}`, which is
+                # not JavaScript. The iframe dies on a blank page while the export server renders
+                # the PNG perfectly — a divergence no options-dict test can see.
+                #
+                # And the rule is about the VALUE, not the key, which is the part that makes it a
+                # trap rather than a footnote: a string that opens `{`, closes `}` and carries
+                # at least as many COLONS as brace-pairs is emitted bare,
+                # on any key. `{value:%b %Y}` (1 pair, 1 colon) goes bare; `{point.name}: {point.y}`
+                # — pie's, funnel's and pyramid's label — is 2 pairs against 1 colon and is QUOTED,
+                # so it escapes by exactly one colon, and adding a precision to it
+                # (`{point.name}: {point.y:.1f}`) would blank those three charts. All measured on the
+                # round-trip. So the tooltip this branch sets below is safe ONLY because it opens
+                # with `<b>` (a string that does not open `{` never reaches the test at all), not
+                # because tooltip keys are exempt — an edit that "simplifies" it by dropping the markup
+                # walks straight into this. `test_no_supported_type_emits_an_unquoted_format_object`
+                # is keyed on the value shape for that reason, and covers every type.
+                #
+                # Highcharts' own date ticks ("Jan 2026 … Jul 2026") are already right anyway.
+                #
+                # And no `categories`, the other tempting key: with named points it throws
+                # `TypeError: a.indexOf is not a function` and blanks the chart. A timeline and a
+                # category axis are incompatible.
+                "xAxis": {"type": "datetime", "title": {"text": date_col}},
+                # Hidden, and BOTH keys are load-bearing. Left out entirely, Highcharts draws a y
+                # axis titled "Values" with a single tick at 1 — measuring nothing, since a
+                # timeline point has no y — and shifts the plot area right to make room for it.
+                # `visible` removes it. The EMPTY-STRING title is deliberate and is NOT the
+                # `{"text": None}` this module warns about elsewhere: `None` does not clear a
+                # Highcharts axis title, it makes highcharts-core drop the key on the way out, so
+                # the default "Values" would come back.
+                "yAxis": {"visible": False, "title": {"text": ""}},
+                # Belt and braces, and NOT the grey-bullet argument the types above use: a
+                # Highcharts timeline series already defaults to `showInLegend: false`, so removing
+                # this key leaves the emitted chart byte-identical (verified). It is spelled rather
+                # than inherited for `colorByPoint`'s reason — the module does not rely on a
+                # Highcharts default — and the reading holds anyway: every event carries its own
+                # name in its own label, so a legend would have nothing left to say.
+                "legend": {"enabled": False},
+                "plotOptions": {
+                    "timeline": {
+                        # The other half of the `_themed` precondition — see the seeding above.
+                        # It is Highcharts' default for this type INVERTED, which is why it must
+                        # be spelled rather than inherited.
+                        "colorByPoint": False,
+                        # The tooltip has to live HERE rather than at the top level, and the
+                        # reason is Highcharts' PRECEDENCE rather than highcharts-core's
+                        # dropping: `plotOptions.timeline.tooltip.pointFormat` carries a built-in
+                        # default of `{point.description}`, and a series-level default BEATS a
+                        # top-level tooltip — so a top-level `pointFormat` would serialize
+                        # perfectly and then never be read, drawing an empty box on every hover.
+                        # Sankey's `nodeFormat` rule in mirror (there the top-level key is
+                        # dropped in SERIALIZATION; here it survives and loses at RENDER time),
+                        # and the same `plotOptions[type]["tooltip"]` spelling sankey and
+                        # dependencywheel already use. `_themed` still paints the box: it merges
+                        # into the TOP-LEVEL tooltip, which carries the colours, and leaves this
+                        # format alone.
+                        #
+                        # `{point.x:…}` is xrange's token (with the precision picked below from
+                        # the data), and the date is the one thing a
+                        # reader cannot get exactly off the page: the ticks are months and the
+                        # marks are instants. It is NOT labelled with the column name the way
+                        # bullet's and dumbbell's are — that rule exists because a nulled slot
+                        # renders as nothing and a run-together format would trail off
+                        # mid-sentence, and a timeline HAS no nulled slots: a dateless row is
+                        # dropped, so `{point.x}` always resolves. `{point.y}` must never appear
+                        # here — Highcharts assigns every timeline point y = 1 internally, so it
+                        # would print a meaningless "1" rather than nothing.
+                        # The precision follows the DATA, and it has to: this tooltip is the
+                        # only place a timeline states the instant (the ticks are months, the
+                        # marks are points), so a fixed `%Y-%m-%d` prints one identical reading
+                        # for a deploy that started at 09:30 and ended at 17:45 — two marks
+                        # correctly placed and indistinguishable in the one channel that was
+                        # supposed to tell them apart. `date_columns` accepts such a column, so
+                        # this is reachable from the app, and it was found by review rather than
+                        # by rendering, because every frame rendered here had day granularity.
+                        #
+                        # Widening it unconditionally would be the wrong trade the other way: on
+                        # a milestone list every tooltip would trail a meaningless " 00:00".
+                        "tooltip": {
+                            "headerFormat": "",
+                            "pointFormat": (
+                                f"<b>{{point.name}}</b><br/>{{point.x:{_TIMELINE_INSTANT if sub_day else _TIMELINE_DAY}}}"
+                            ),
+                        },
+                        # NO dataLabels key, and that is this type's one INVERSION of the module's
+                        # habit rather than an omission. Everywhere else the labels are off by
+                        # default and this module turns them on behind a count gate (heatmap's
+                        # cells, sankey's links, waterfall's steps, sunburst's sectors); a
+                        # timeline's default ON, and Highcharts' own FORMATTER is already the
+                        # right chart — a colour bullet and the event name, alternating above and
+                        # below the spine with connectors. Setting a `format` would REPLACE that
+                        # formatter and cost both the bullet and the bold. So here the omitted key
+                        # is the DECISION, not the gate. Nor could a finer one exist: `alternate`,
+                        # `connectorWidth`, `connectorColor` and `width` are
+                        # silently dropped at EVERY level, and `distance` at this one — but
+                        # `distance` DOES survive on the SERIES, and it moves the label (verified
+                        # by round-trip and by rendering). So the stagger is reachable, just not
+                        # from here; it is left alone because Highcharts' own spacing is right at
+                        # every density tried, not because there is no knob. `_themed` recolours the
+                        # label BOX; see the hook.
+                    }
+                },
+                # The series is named for the DATE column, not for a value column, because there
+                # is no value column — the series name reaches only the tooltip header, which this
+                # type blanks, so it is documentation rather than chrome.
+                "series": [{"name": date_col, "data": points}],
+            },
+        )
+
     x_is_label = not (
         chart_type in (XY_TYPES + BUBBLE_TYPES)
         and pd.api.types.is_numeric_dtype(df[x_col])
@@ -4345,8 +4773,12 @@ def build_options(
                         # key here, and deriving none from the frame, makes both traps unreachable
                         # rather than remembered. Do not wire a width or a height to a column.
                         #
-                        # `color` is set for LIGHT mode here and FLIPPED in `_themed`; see the hook
-                        # there for why a fixed value cannot work in principle.
+                        # `color` is a FIXED value set here and never flipped: `_themed` has no
+                        # bullet hook at all. It reads on the one shell there is, which is the
+                        # whole of what a crossbar crossing both the bar and the background can
+                        # ask for — see `_BULLET_TARGET_COLOR`. (This note used to say the value
+                        # was flipped in `_themed`; that was true of the two-mode world 0.18.0
+                        # removed, and the hook it described has not existed since.)
                         "targetOptions": {
                             "color": _BULLET_TARGET_COLOR,
                             "borderColor": _BULLET_TARGET_BORDER_COLOR,
@@ -4434,7 +4866,13 @@ def build_options(
                 # fix, columnrange's and bullet's reason — and `{point.name}` is BLANK here anyway
                 # (the points are positional arrays).
                 #
-                # `{point.z}` is the one number in this module that a tooltip is the ONLY home for.
+                # `{point.z}` is a number a tooltip is the ONLY home for — which it shares with
+                # `bubble`'s own `size_col`, the same token on the same key, and bubble predates
+                # this type by many releases. (This note claimed "the one number" until a docs
+                # audit built a bubble and read its options: no `plotOptions`, so no dataLabel.)
+                # What differs is the MARK, not the channel: a variwide buys a bar's WIDTH, so the
+                # bars tile the axis and adjacency is the chart, while a bubble buys a marker's
+                # AREA, so the marks float and the magnitude is read across them.
                 # Everywhere else the "prints nothing in the mark" rule rests on xrange's premise —
                 # the value lands on a real, ticked axis — and here that premise is FALSE for the
                 # width: the x axis carries variable-width category slots, not a scale, so nothing
@@ -4638,6 +5076,41 @@ def explain_xrange_error(
     return _xrange_bars(df, x_col, start_col, end_col)[3]
 
 
+# The kinds each picker source accepts, named so the two lists below are ONE MEMBERSHIP TEST
+# apart rather than two comprehensions that happen to agree. `_COORD_EMPTY` is in both: an empty
+# column makes no claim (see the constant), so it is compatible with either.
+#
+# What that buys is precise, and worth not overstating: the single shared sniff below is
+# structural, but the SUBSET is still two literals — `_DATE_KINDS` is not derived from
+# `_COORDINATE_KINDS`, so dropping `_COORD_EMPTY` from the wider tuple would break the relation
+# with both comprehensions still reading correctly. That case is caught by
+# `test_picker_columns_answers_both_pickers_from_one_sniff`'s `set(date_cols) <= set(coord_cols)`,
+# which is therefore doing real work rather than restating the code.
+_COORDINATE_KINDS = (_COORD_NUMBER, _COORD_DATE, _COORD_EMPTY)
+_DATE_KINDS = (_COORD_DATE, _COORD_EMPTY)
+
+
+def picker_columns(df: pd.DataFrame) -> tuple[list[str], list[str]]:
+    """``(coordinate columns, date columns)`` from ONE sniff of the frame.
+
+    Both lists source a picker, and both are answers to the same question asked of every column,
+    so asking it twice is waste the app pays on EVERY rerun — a slider drag, a title keystroke —
+    for every chart type, including the ones that use neither list. ``_coordinates`` runs both a
+    ``to_datetime`` and a ``to_numeric`` coercion per object column, which on a wide uploaded CSV
+    is the sidebar's most expensive operation; this halves it.
+
+    It also makes the relation between the two lists structural. ``_DATE_KINDS`` is a literal
+    subset of ``_COORDINATE_KINDS``, so "every date column is a coordinate column" is now true by
+    construction rather than by two comprehensions agreeing — which is the shape this module
+    prefers everywhere else (see the family constants at the top).
+    """
+    kinds = {col: _coordinates(df[col])[1] for col in df.columns}
+    return (
+        [col for col, kind in kinds.items() if kind in _COORDINATE_KINDS],
+        [col for col, kind in kinds.items() if kind in _DATE_KINDS],
+    )
+
+
 def coordinate_columns(df: pd.DataFrame) -> list[str]:
     """The columns that can place a bar on an axis — numbers, or dates.
 
@@ -4652,7 +5125,46 @@ def coordinate_columns(df: pd.DataFrame) -> list[str]:
     through, ``_coordinates`` returns a MESSAGE rather than raising, so this is belt and
     braces rather than load-bearing.)
     """
-    return [col for col in df.columns if _coordinates(df[col])[1] != _COORD_NEITHER]
+    return picker_columns(df)[0]
+
+
+def date_columns(df: pd.DataFrame) -> list[str]:
+    """The columns that can say WHEN — dates only, never plain numbers.
+
+    ``coordinate_columns`` narrowed by one kind, exported for the app's timeline Date picker, and
+    sourced from ``_coordinates`` itself for its sibling's reason: a selectbox can never offer a
+    column the builder would refuse.
+
+    The narrowing is why this type ships without an ``explain_*`` function while xrange needs one.
+    Xrange's pickers are ``coordinate_columns``, so a user really can select a column that loses,
+    and the app has to explain the loss afterwards. A timeline's cannot: ``_TIMELINE_NOT_A_DATE``
+    is unreachable from the UI, and the guard in ``build_options`` stands only behind the pure-API
+    caller. Making a contradiction unreachable beats explaining it, so ``bullet``'s "adds no
+    fourth" claim about the ``explain_*`` family survives this type — by a different route than
+    bullet's.
+
+    But the narrowing is only HALF of that guarantee, and shipping it as the whole was a real bug
+    rather than a loose sentence. This function sniffs the RAW column; ``_timeline_events`` used
+    to sniff the ``_label_ok`` SURVIVORS, and a frame whose named rows are disproportionately
+    non-dates flips the majority vote between the two — so the picker offered a column
+    ``build_options`` then raised on, replacing the page with a traceback. The second half is that
+    ``_timeline_events`` now asks THIS function's question: the kind is decided over the whole
+    column, so both read only ``df[date_col]`` and neither can be moved by what the label column
+    happens to drop. A future edit that "optimizes" either sniff to the other row set re-opens it,
+    and ``test_timeline_never_refuses_a_column_its_own_picker_offered`` is what says so.
+
+    (Xrange carries the same asymmetry — a raw-sniffing picker over a survivor-sniffing build —
+    and is unharmed by it only because ``explain_xrange_error`` re-runs the build on the raw frame
+    and warns. That is the cost of the route this type declined; it is not an argument for
+    declining it, but it is why xrange must keep its ``explain_*``.)
+
+    ``_COORD_EMPTY`` is INCLUDED, and that is not a leak. An empty column makes no claim (see the
+    constant), so refusing it here would refuse a header-only CSV and a Gantt-style sheet whose
+    dates are simply unfilled — missing data with a right answer, which the module drops row by
+    row and draws empty. Tightening this to ``== _COORD_DATE`` reintroduces the exact bug xrange's
+    own review caught, one type over.
+    """
+    return picker_columns(df)[1]
 
 
 def count_marks(
@@ -4669,7 +5181,7 @@ def count_marks(
     (a heatmap's cells, a treemap's tiles, a sankey's or dependencywheel's flows, a
     networkgraph's links, an organization's reporting lines, a boxplot's boxes, a waterfall's
     steps, a sunburst's sectors, an xrange's bars, a columnrange's ranges, an arearange band's
-    points, a bullet's measures, a variwide's bars, a dumbbell's changes).
+    points, a bullet's measures, a variwide's bars, a dumbbell's changes, a timeline's events).
 
     Defined here, beside ``build_options`` and reusing its very ``_label_ok`` / ``_plottable``
     predicates, so the KPI number can never drift from what the chart actually renders — the
@@ -4691,11 +5203,16 @@ def count_marks(
     ``EnforcedNull``) plus its appended total. The MAGNITUDE_RANGE types (columnrange and its
     filled-band mirror arearange) are waterfall without that total: one mark per drawable label, a
     missing/inverted range kept as an ``EnforcedNull`` slot, so their value columns are never read
-    here. Sunburst and xrange are the two types whose
+    here. Sunburst, xrange and timeline are the three types whose
     count is not a row filter at all — see their branches, which reuse the whole build rather
     than the predicates — and sunburst's, like waterfall's, exceeds its drawable row count, by
     the appended root. Xrange's does not: it appends nothing, so it is one bar per surviving
-    row.
+    row. Timeline's is one bar per surviving row too, but it is reached by NEITHER of their
+    arguments: its branch in ``build_options`` returns above the shared label filter, so both
+    callers hand ``_timeline_events`` the same RAW frame and there are no two frames to reconcile.
+    The reuse is instead so that WHETHER ITS DATE COLUMN IS A DATE COLUMN — a column-level fact —
+    is decided in the one place that must also agree with ``date_columns``, which sources the
+    app's picker.
 
     The GAUGE FAMILY (``solidgauge`` and ``gauge``) has no rule here AT ALL, and deliberately:
     their marks ARE their series — one ring, or one needle, per y column, an empty column kept as
@@ -4727,6 +5244,19 @@ def count_marks(
         # A contradictory column pair draws nothing — build_options raises, the app warns and
         # stops — so it counts nothing. And this must NOT raise, for the reason the sunburst
         # branch below must not: count_marks runs ABOVE the app's guards.
+        return 0 if problem else len(points)
+    if chart_type in TIMELINE_TYPES:
+        # Whole-build reuse, the THIRD after sunburst and xrange, but NOT for their reason. Theirs
+        # is that the two callers hold different frames, so only a shared build can keep the KPI and
+        # the chart in step. Timeline's branch in `build_options` returns ABOVE the shared
+        # `_label_ok` filter, so both callers hand `_timeline_events` the SAME raw frame — and the
+        # reuse is instead about the column-level sniff being decided once, in the one place that
+        # also has to agree with `date_columns`. See `_timeline_events`. The signature needs no new
+        # argument: a timeline's second column is `y_cols[0]`, which this already has.
+        points, _sub_day, problem = _timeline_events(df, x_col, y_cols[0])
+        # A date column that is not dates draws nothing — `build_options` raises — so it counts
+        # nothing. And this must NOT raise, for the reason the two branches around it must not:
+        # `count_marks` runs ABOVE the app's guards.
         return 0 if problem else len(points)
     if chart_type in SUNBURST_TYPES:
         # Sunburst's drops are not a per-row mask, so this branch sits ABOVE the shared one

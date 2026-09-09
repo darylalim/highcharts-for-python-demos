@@ -1,6 +1,6 @@
 # Chart types
 
-The per-type design record for `highcharts-studio`: why each of the 29 supported
+The per-type design record for `highcharts-studio`: why each of the 30 supported
 types is built the way it is, what the library silently drops, and which decisions
 were settled by rendering rather than by inference.
 
@@ -138,8 +138,9 @@ at one value, which Highcharts renders as a single dot with no connector, i.e. a
 anywhere" — a reading this type exists to express. A bullet sitting on its own crossbar at least
 looks suspiciously perfect; this just looks like a quiet quarter.
 
-The **gauge family** (`solidgauge` and `gauge`) takes the fifth and sixth, and they are the only
-two that are **not column names**: `agg=` names the reduction each mark applies to its column (one
+The **gauge family** (`solidgauge` and `gauge`) takes the **tenth and eleventh**, and they are the
+only two that are **not column names** — so they sit outside the column-kwarg numbering above
+entirely, which is why `CLAUDE.md` states two different counts: `agg=` names the reduction each mark applies to its column (one
 of `GAUGE_AGGREGATIONS`; raising `ValueError` otherwise) and `dial=` an explicit `(min, max)`
 scale, which — left `None` — is *derived from the readings* by `gauge_dial` (raising `ValueError`
 when its maximum does not sit above its minimum: see `explain_gauge_error`). Both are read by both
@@ -359,24 +360,36 @@ as the different KIND of bar it is: a **level**, not a change. It labels each ba
 its delta — gated on step count like heatmap's cells and sankey's links — because unlike
 column/bar (which carry no labels) a waterfall's bar floats at the running total and
 encodes its value as a *length*, not a height above the axis, so no axis can be read
-against it. It shares bubble's, radar's and boxplot's `highcharts-more` module, and it is
-the **first** type to need **two** `_themed` hooks (`bullet` is the second, and the two pairs
-have nothing in common: bullet's *is* the column/bar dissolve plus a hue flip on a MARK) — and
-here *neither* is the column/bar case, since
+against it. It shares bubble's, radar's and boxplot's `highcharts-more` module. Its
+`_themed` branch writes **two** keys rather than one (`bullet` was named here as the other
+such type until `0.20.0`, and is **not** one: its crossbar colours are fixed constants written in
+`build_options`, and `_themed` has no bullet branch at all) — and *neither* write is the
+column/bar case, since
 waterfall's border and connectors both default to a fixed `#333333` (measured off the
 rendered PNG) rather than the background variable that resolves to white for column/bar,
 so its bars are never ringed white. `borderColor`: that crisp definition line on the white
 shell becomes a muddy grey ring one shade off the dark background, and buys nothing (a
 waterfall's bars never touch), so it is dissolved into the background as pie/treemap/sankey
-dissolve their gaps. `lineColor`: the *connector* lines — the only line Highcharts draws
-*between* marks, and what makes the chart read as a running total at all — survive on the
-dark background only barely, so they are lifted to the axis color), and `sunburst` (a
+dissolve their gaps. `lineColor`: the *connector* lines — the only line in this module drawn
+BETWEEN two separate marks, and what makes the chart read as a running total at all — survive on
+the dark background only barely, so they are lifted to the axis color. The scoping is load-bearing,
+because several types draw a line among their marks — the cartesian family's own series line
+included — and the RELATION differs in each: a `dumbbell`'s
+connector joins the two ends of ONE point (there the connector *is* the mark, and Highcharts already
+draws it in the series hue, so it needed a width and no theme write at all), and a `timeline`'s
+spine is the line the events sit *on* — this file's own words for it — which is not a line drawn
+between them. Only a waterfall's connectors are their own element with their own `lineColor`, run
+from one bar to the next; a timeline's spine is the SERIES line, `lineColor` silently dropped for
+the type, leaving the series `color` as the only route in), and `sunburst` (a
 hierarchy drawn as concentric rings — the only type that reads the frame as an **adjacency
 list**: each row is one node, named by `x_col`, placed under the node named in `parent_col`
 (a blank/missing/whitespace parent means a top-level branch — the one place in the module
 where a missing label is a *statement* rather than an error), and, *if it is a leaf*, sized
-by the first `y_cols` column. So it is also the only type whose marks are not in the data:
-the tree has to be **assembled** before anything can be drawn, which is what `_sunburst_tree`
+by the first `y_cols` column. So its marks are not in the data at all — and it is the only type
+that **assembles** them, which is a rule rather than a tally and so cannot go stale: every other
+type whose marks are not in the data either *aggregates* (a boxplot, rows into a box) or *reduces*
+(the gauge family, a whole column to a reading), while a sunburst
+has to build a TREE before anything can be drawn, which is what `_sunburst_tree`
 does — and, since a node's fate depends on its *ancestors* (a dangling parent, a cycle) and
 on its *descendants* (a valueless internal node lives only if a leaf under it does), it is the
 one type whose drops are not a per-row mask at all. `count_marks` therefore reuses not the
@@ -456,9 +469,11 @@ value is already the *angle*. `allowTraversingTree` makes a click re-root the ch
 branch. It needs **one** `_themed` hook — `borderColor`, the white sector rings that pie,
 treemap and sankey each dissolve — and pulls in `modules/sunburst`, and, unlike
 bubble/radar/boxplot/waterfall, *not* `highcharts-more`), and `xrange` (a Gantt-style
-timeline, and the only type whose mark has **extent** along the x axis rather than sitting at
-a point on it. Each row is one bar, on the **lane** named by `x_col` — and here `x_col` is not
-an x axis at all: the lanes are the categories of the **Y** axis, so its values *repeat*
+**schedule**, and the one type whose mark has **extent** along the x axis rather than sitting
+at a point on it. This entry called it a "Gantt-style timeline" until that word became a type
+name of its own, and the rename is not cosmetic: the two charts differ in precisely the thing
+the word would then have named twice. Each row is one bar, on the **lane** named by `x_col` —
+and here `x_col` is not an x axis at all: the lanes are the categories of the **Y** axis, so its values *repeat*
 (boxplot's long/tidy shape, but a lane holds 0..n bars rather than aggregating into one
 mark), and `y` is a *position* into `yAxis.categories` rather than a value (boxplot's
 positional trick again). The bar spans from the first `y_cols` column to `end_col`.
@@ -541,8 +556,14 @@ ends BOTH land on a real, ticked x axis that renders in the Static PNG too — c
 not waterfall's — and there is no second identity to print, since the lane name IS the y-axis
 category. Its tooltip uses `{point.name}`, which is waterfall's *fix* and xrange's **bug** in
 mirror image: `{point.category}` reads the X axis, and an xrange's categories are on the Y, so
-it renders the raw x value (a tooltip reading `1767571200000` — verified by rendering). It
-needs **one** `_themed` hook, and it joins **column/bar** rather than waterfall — the other
+it renders the raw x value (a tooltip reading `1767571200000` — verified by rendering). That
+tooltip's span switches on the axis **kind** and not on the data's granularity, which timeline's
+review showed to be a live distinction: two same-day tasks (`09:30 → 17:45`, `18:00 → 19:00`) both
+come back `2026-01-12 → 2026-01-12`, the reading a zero-length **milestone** has — round-tripped,
+recorded and deliberately not fixed here, since the ends land on a ticked axis and this is a
+shipped type
+([the rule and the trade](decisions.md#tooltip-precision-when-a-channel-is-a-values-only-home)).
+It needs **one** `_themed` hook, and it joins **column/bar** rather than waterfall — the other
 bar-shaped type, which needs the opposite treatment. That was *measured*, not inferred from the
 shared bar base class: waterfall is the standing proof the inference is unsound, its border
 being a fixed `#333333`, while xrange's default border is pure white (the background variable),
@@ -683,7 +704,7 @@ entirely alone (the pane-`size` "stop steering" rule, the funnel/pyramid "the de
 call). Setting no numeric key there, and deriving none from the frame, makes both traps unreachable
 rather than remembered.
 
-So it needs **two** `_themed` hooks. The first is the `borderColor` dissolve, where bullet is the
+So it needs **one** `_themed` hook — the `borderColor` dissolve, where bullet is the
 **fifth** member of the literal tuple (`column`, `bar`, `xrange`, `columnrange`, `bullet`,
 `variwide`) — joined
 on a **measurement**, not on an inference: its bars are a column subclass, but so are waterfall's,
@@ -691,21 +712,35 @@ and waterfall is the standing proof the base class settles nothing (its border i
 `#333333`). Rendered in dark mode a bullet's bars come back crisply ringed white, the background
 var, column/bar's case exactly. The tuple stays a **literal**, because arearange is deliberately
 absent from it despite sharing columnrange's branch — extend it, do not swap it for a family
-constant. The second is the crossbar's own hue, and it is the **only `_themed` hook in this module
-that flips a MARK rather than chrome**. That is a principle, not a preference: at 140% width the
-marker necessarily crosses **both** the bar (a constant palette blue in both themes) *and* the
-background (white → slate), so a fixed colour cannot work **in principle** — a near-black reads on
-the light shell and disappears on the dark one, a near-white does the exact reverse, and both were
-rendered to confirm it.
+constant.
 
-That "in principle" is now **arithmetic** rather than a rendered impression, and the arithmetic
-changed the fix. Against the theme's palette, clearing WCAG 3:1 on the slate background needs a
-relative luminance ≥ 0.25 and on the palette blue needs ≤ 0.087: the two ranges do not overlap, so
-no single value exists *at all*. The flip therefore carries **two** values in dark mode — a light
-fill (16.3:1 on the background) plus `_BULLET_TARGET_BORDER_WIDTH` of `_DARK_CHROME["bg"]` border
-(7.0:1 on the bar) — because a mark spanning two surfaces needs one value per surface. Light mode
-keeps a single near-black fill, which does clear both (17.9:1 and 7.0:1); the border is a
-dark-mode repair, not part of the mark.
+The crossbar's own colour is **not** a second hook, and this file said for two releases that it
+was. `_BULLET_TARGET_COLOR` and `_BULLET_TARGET_BORDER_COLOR` are fixed module constants written
+once in `build_options`; `_themed` has no bullet branch at all, and the string `"bullet"` appears
+in it only inside the border-dissolve tuple. The "dark-mode **flip**, the one `_themed` hook that
+moves a MARK" this entry claimed — and the test inventory claimed twice more — was a **fossil of
+the two-mode world `0.18.0` removed**: there is one shell now, so a value that reads on it needs
+no flip, and the hook that did the flipping went with the flag. It is recorded rather than quietly
+deleted because it is the exact failure the ordinal/uniqueness sweep exists to catch and did not:
+the claim was **bolded**, so the sweep's own regex skipped it until `0.20.0` widened it (see the
+Appendix), and the prose then outlived its mechanism everywhere it was repeated — this entry,
+waterfall's parenthetical, both test-inventory passages, the conventions appendix and a comment in
+the builder — while every bullet test stayed green, since none of them asserts what `_themed` does
+*not* contain.
+
+What survives the correction is the reason the crossbar takes **two** values rather than one, which
+was never about modes. At 140% width the marker necessarily crosses **both** the bar (a constant
+palette blue) *and* the background, and against this theme's palette clearing WCAG 3:1 on the slate
+background needs a relative luminance **≥ 0.126** while clearing it on the palette blue needs
+**≤ 0.088**: the interval is empty, so no single value exists *at all*. (Recomputed from the
+constants rather than quoted — the figures the builder now carries. This file said `≥ 0.25` for a
+release, which was wrong on the first bound and, being a number rather than a superlative, is
+exactly the kind of drift neither sweep regex can see.) Hence a light fill
+(`_DARK_CHROME["text"]`, 16.3:1 on the background and 2.3:1 on the bar) plus
+`_BULLET_TARGET_BORDER_WIDTH` of `_DARK_CHROME["bg"]` border (1.0:1 on the background and 7.0:1 on
+the bar) — each covering precisely where the other fails, because **a mark spanning two surfaces
+needs one value per surface**, which is a geometric fact about this mark and would still hold if a
+second shell came back.
 
 This was found the hard way: adopting the theme's palette lightened the bar from `#2563eb` to
 `#60a5fa` and dropped the fill's contrast against it from 4.19:1 to **2.32:1**, and *every* bullet
@@ -713,9 +748,10 @@ test stayed green — they each assert one hue at one path, and legibility here 
 **pair**. The test now states the pair as a rule (each surface must have a ≥ 3:1 partner among
 {fill, border}) rather than as a hex, so the next palette is checked too. Where every border
 dissolve above matches a mark **to** the background,
-this one matches it **against** the background; `_BULLET_TARGET_COLOR` is `_DARK_CHROME["bg"]` read
-the other way round, so the pair the crossbar swings between is exactly the pair the app shell does
-and neither can drift (`_NEEDLE_PIVOT_COLOR = _SUNBURST_ROOT_COLOR`'s aliasing rule). Highcharts'
+this pair reads **against** it: the fill is `_DARK_CHROME["text"]` and the border
+`_DARK_CHROME["bg"]`, which is exactly the shell's own text-on-background pair, so neither half can
+drift from the app around it (`_NEEDLE_PIVOT_COLOR = _SUNBURST_ROOT_COLOR`'s aliasing rule).
+Highcharts'
 `contrast` is no help: it computes against the fill a *label* sits on, and this is a shape.
 
 It carries **no qualitative plot bands**, and that is a decision rather than an omission: the
@@ -817,9 +853,20 @@ expressible — and, like bullet's, that pin guards a real **decision**, since v
 
 It **prints nothing in the mark** — but **not** by xrange's premise, which is **false** here: an
 xrange's two ends both land on a ticked axis, whereas a variwide's **width lands on no readable axis
-at all** (the x axis carries variable-width category slots, not a scale). It is the one number in
-this module a **tooltip is the only home for**, carried as `{point.z}` beside `{point.category}` and
-`{point.y}`. Printing it in the bar would fail exactly where it is most wanted: a bar narrow enough
+at all** (the x axis carries variable-width category slots, not a scale). So the width is a
+**magnitude the tooltip is the only home for**, carried as `{point.z}` beside `{point.category}`
+and `{point.y}` — and that is a shape this type SHARES rather than owns. `bubble` got there first
+and by the identical route: a `size_col` is a magnitude too, it lands on no axis, it is printed in
+no dataLabel (a bubble's options carry no `plotOptions` at all — verified on the built dict), and
+it is stated only in the tooltip, through the very same `{point.z}` token. What differs is the MARK
+the magnitude is spent on, and that is the difference worth writing down: a variwide buys a bar's
+**width**, so the bars tile the plot area and adjacency IS the chart; a bubble buys a marker's
+**area**, so the marks float free and the magnitude is read across them rather than along a row.
+(A `timeline`'s date is neither — a *coordinate*, not a magnitude, and one its axis does place; the
+axis is simply ticked in months while the marks are instants, so the axis puts the event and only
+the tooltip states the day — or the instant, when the column carries clock times, which is why
+that one format string has to follow the data.) Printing it in the bar would fail exactly where
+it is most wanted: a bar narrow enough
 to need its width read is too narrow to hold a label, and Highcharts hides a colliding label by
 rendering it **invisible**. It sets **no `pointPadding`/`groupPadding`**: variwide overrides column's
 0.1/0.2 defaults to **0/0** deliberately, so its bars **touch** — that adjacency IS the chart type,
@@ -913,10 +960,12 @@ exists to remove is declared and never painted, so a hook would dissolve a borde
 drawn. The tuple therefore stays at **six**. What it sets instead is `_DUMBBELL_BEFORE_COLOR`, the
 BEFORE marker's hue, aliased to `_SUNBURST_ROOT_COLOR` (no new colors invented) and deliberately OFF
 the categorical palette — a prior reading is not one of the categories, so no palette entry can say
-it and a custom `colors` must not repaint it into looking like a second series. It needs **no dark
-flip**, and that is geometry rather than luck: a bullet's crossbar is drawn at 140% of the bar width
-so it necessarily crosses **both** the bar and the background, which no fixed value can serve, while
-a dumbbell's markers sit only on the background, so one mid-slate reads on both shells. Setting it at
+it and a custom `colors` must not repaint it into looking like a second series. **One** value
+suffices, and that is geometry rather than luck: a bullet's crossbar is drawn at 140% of the bar
+width so it necessarily crosses **both** the bar and the background, which no single value can
+serve (hence its fill-plus-border pair), while
+a dumbbell's markers sit only on the background, so one mid-slate reads against everything they
+touch. Setting it at
 all is load-bearing — Highcharts' own default is a near-black that all but vanishes on the dark
 shell.
 
@@ -948,13 +997,319 @@ round-trip **confirms** here, unlike columnrange/funnel/bullet/variwide where it
 needs **no** `_MODULE_LOAD_ORDER` entry, verified in the walk order that reverses for
 dependency-wheel and organization: highcharts-core emits the prerequisite first both with and
 without a `plotOptions.dumbbell` key), and
+`timeline` (a sequence of dated **events** — one instant per row, drawn as a marker on one shared
+spine. It is the **second** type whose value slot holds a **coordinate** rather than a magnitude,
+after `xrange`. So the pair xrange/timeline is the coordinate family's own columnrange/bullet split
+— one data role read two ways — and the difference is EXTENT. Two coordinates are a **span**, and
+the mark is a bar with two ends on the axis; one coordinate is an **instant**, and the mark is a
+point with none. An event has no size, only a moment, which is why nothing about this type has a
+magnitude channel to null, to invert, or to gate a label on.
+
+The mapping is the first decision and the one everything else follows from: `x_col` is the event's
+**name** and the first `y_cols` column is its **date**. That looks backwards for about a second —
+the date is what the x axis draws — and it is xrange's mapping with one end removed rather than a
+new idea. `x_col` is this module's **label** role everywhere it appears (`_label_ok`, "this names a
+mark"); xrange spends it on the lane and puts both coordinates in the value slots; a timeline has
+one coordinate, so it puts one there. Two alternatives were rejected and each would have cost more
+than it bought. A **tenth kwarg** (`date_col=`) would have paid three cache wrappers and three call
+sites to say what `y_cols[0]` already says, and the kwarg table's whole argument is that a new
+kwarg buys a distinct **role** — a date here IS the value slot's role for this type, not a second
+one beside it. An **empty `y_cols`** with the date in a kwarg would have made the type the
+unweighted node-link pair's third member for no reason at all: those two are empty because they
+have no value channel, and a timeline's value channel is exactly what it is about. So: zero new
+kwargs, `_EXTRA_COLUMN_KWARGS` untouched, and the cache layer untouched — the outcome `arearange`
+and `dependencywheel` each bought by **reusing** an existing kwarg, reached here by needing none.
+It is checkable rather than asserted: the kwarg count, the kwarg table read by name, and
+`_FORWARDED`'s shrink floor are all derived from the builders' signatures, and all three stayed
+green through this change without an edit.
+
+Its picker is **narrower** than xrange's, and that narrowing is the whole of the type's guard
+story. `coordinate_columns` accepts a number, because a bar spanning 3 to 8 is a legitimate span;
+`date_columns` refuses one, because a timeline places its marks on a **time** axis and a number
+cannot say when. That is not fastidiousness: rendered, five events at `x = 1,2,3,5,8` came back as
+five wide coloured **bands**, two of them abutting, with the axis ticks overprinted by the point
+names — a chart that is not a timeline. So `_TIMELINE_NOT_A_DATE` is a real column-level
+contradiction and `build_options` really does raise it, and yet there is **no
+`explain_timeline_error` and no app-side warning**, which is the opposite of xrange's answer to the
+same shape of problem. The reason is that the two guards are not equally reachable: xrange's
+pickers are `coordinate_columns`, so a user can genuinely select a losing column and the app has to
+explain the loss afterwards; a timeline's picker cannot offer one at all. **An unreachable
+contradiction beats an explained one**, so the guard stands behind the pure-API caller alone — belt
+where xrange needed braces — and `bullet`'s "adds no fourth" claim about the `explain_*` family
+survives this type by a second, different route. That unreachability is a **property of the code,
+not a wish**, and it is worth knowing which line buys it: `date_columns` (through
+`picker_columns`, which is where that sniff now lives) and `_timeline_events`
+both read the kind off `df[date_col]` **whole**, so neither the label column nor the rows it
+drops can move the answer and the two cannot disagree. They once could, and the picker duly offered
+a column the builder raised on — see the `_timeline_events` paragraphs below, which are where this
+sentence would otherwise be false. `_COORD_EMPTY` is deliberately **included** in the
+picker: an empty column makes no claim about any axis, so refusing it would refuse a header-only
+CSV and a sheet whose dates are simply unfilled — missing data with a right answer, which is
+exactly the bug xrange's own review caught, one type over.
+
+Its missing-data policy is **drop the row**, and it is the one type here where that is the
+**library's** decision rather than this module's: there is no keep-the-slot form to choose between.
+`EnforcedNull` is unusable on *both* of a timeline point's channels. In `name` it raises inside
+`Chart.from_options` — one layer BELOW `build_options`, the bullet-goal / `_NEEDLE_DIAL` layer
+again, so an options-dict suite would stay green while the chart could not be built — and in `x`
+highcharts-core removes the key outright, whereupon Highcharts back-fills a date the frame never
+held: a mark that **lies** rather than one that is missing, which is the failure mode this module
+drops rows to avoid everywhere else. So both channels drop, `_label_ok` for the name and
+`_plottable` for the coerced coordinate, and the policy is worth recording as forced rather than
+preferred — the next reader who wants to "restore consistency" with the category-x family needs to
+know it was tried.
+
+`_timeline_events` is the **whole build**, shared by `build_options` and `count_marks`, and it is
+the third such reuse after sunburst's and xrange's — but for **neither of their reasons**, which is
+worth stating because the resemblance is what would mislead. Theirs is that their two callers hold
+*different frames* (`build_options` reaches its branch on the `_label_ok`-filtered one, `count_marks`
+on the raw one), so only a shared build can keep the KPI and the chart in step. Timeline's branch
+returns **above** the shared filter, so both callers hand this helper the **same raw frame**; the
+reuse instead makes the column-level sniff happen **once**, in the one place that also has to agree
+with `date_columns`. A row's survival really does look per-row (its own name, its own date), so the
+type appears to belong on the shared-predicate mask path. It does not, because whether the date
+column IS a date column is a **column**-level fact decided once by `_coordinates`, and a
+predicate-only count could sniff a different column than the chart drew. Reusing the build makes
+that unrepresentable — the KPI is `len(points)` by construction — and `count_marks` needs **no new
+argument** to do it, since a timeline's second column is `y_cols[0]`, which it already has.
+`_label_ok` is applied *inside*, with the row-less `.astype(bool)` cast, and for this type that is
+its **only** application: unlike xrange's, the branch never sees the shared filter. Which is why
+the helper's contract is **not** sunburst's and xrange's "idempotent when the caller has already
+applied it": here **no caller ever pre-applies it**, and one that did would hand this function a
+frame some other column had already shortened — precisely the arrangement the sniff below refuses.
+The docstring carried that borrowed clause only in the unreleased commit this amends; it is a vestige of the copied contract,
+and left standing it reads as permission to reintroduce the bug this type's review fixed.
+
+Where the sniff happens is the type's own correction, and it runs **opposite** to `_xrange_bars`.
+That helper coerces the label-column survivors, so a garbage cell on a row dropped for its NAME
+cannot sway its axis vote; `_timeline_events` sniffs the kind over the **whole** column and indexes
+the survivors out of the result afterwards. The inversion is not a style difference, it is what
+makes the picker's promise true. `date_columns` sniffs the raw column, and this type's guard story
+is that `_TIMELINE_NOT_A_DATE` is unreachable from the app — which holds only if the builder asks
+the picker's question, and the picker's question is about the **column**, not about the rows some
+other column happened to keep. Sniffing the survivors made it **false**, and not theoretically:
+`milestone = [nan, nan, "Public launch"]` beside `date = ["2026-01-12", "2026-02-23", "TBD"]`
+sniffs DATE whole (2 > 1) and NEITHER filtered (0 > 1), so the Date picker offered the column and
+`build_options` raised on it — a Streamlit traceback in place of the page, from a plain CSV, with
+no other column left to pick. Found by **review**, not by the suite, because every test until then
+used a frame on which the two row sets agreed.
+
+The fix makes the kind independent of `x_col` **entirely**, and that property is what does the
+work: two functions that read only `df[date_col]` cannot disagree about it, whatever the label
+column holds or which rows it drops. Its second half is the branch's **placement** — `build_options`
+now returns above the shared `_label_ok` filter, with the gauge family, so both callers hand
+`_timeline_events` the same raw frame (see [How a chart is built](#how-a-chart-is-built): gauge is
+there because it has no label channel, timeline because its branch must see the column
+`date_columns` saw). The provoking row is not swept up to buy that, either: `"TBD"` coerces to NaN
+and `_plottable` drops that one event, which is the honest reading — the column IS dates, and this
+row's date is missing. `test_timeline_never_refuses_a_column_its_own_picker_offered` pins the
+invariant in both flavours the flip comes in.
+
+`_timeline_events` also **sorts by date** before returning, and that is the one place this type
+departs from the module's habit of drawing rows where the frame put them. Three things go wrong
+unsorted and only the first is visible from Python: Highcharts logs warning **#15** ("data input
+must be sorted") on every render; the **palette stops progressing**, since `build_options` seeds
+the hues by list position, so on an unsorted frame the palette order stops running left to right
+across the axis — and a reader takes a colour sequence along a time axis to mean something, where
+here it would mean the CSV's row order; and the
+**dataLabel stagger breaks**, since Highcharts alternates above/below the spine by point INDEX, so
+out-of-order rows put consecutive marks on the same side — three in a row, rendered — and at any
+density the labels overlap. The last is the type's readability rather than a nicety, a timeline's
+label being its mark's whole identity. All three were found by **rendering**; none by a test, which
+is why `test_timeline_draws_its_events_in_date_order_whatever_the_row_order` now pins the order,
+the stability, and the KPI's indifference to it. Two details are load-bearing. The sort runs
+**before** the hue seeding — seeding first and sorting second fixes the warning while carrying the
+scrambled palette along with the points — and it is **stable**, so two events on one date keep
+their row order, the frame's own answer to a question the dates cannot settle. Sorting is safe here
+in a way it would not be for a category-axis type: an instant's position is its own coordinate
+rather than its index, so this reorders the **drawing** and never the **reading**.
+
+Its `_themed` hook is the module's **first with a precondition in the build branch**, and the two
+halves have to be read together or neither makes sense. The **spine** — the line every event sits
+on — is reachable only through the series `color`, because `lineColor` is silently dropped for this
+type at both the plotOptions and the series level (verified: a series-level one came back
+byte-identical to setting nothing). But a series `color` reaches the spine only while
+`colorByPoint` is **off**, and turning it off paints every marker one hue unless each point already
+carries its own. So the branch pins `colorByPoint: False` and seeds each point's hue off
+`itertools.cycle` (sunburst's and xrange's seeding, verbatim), and those two lines are not about
+colour identity at all: they are what makes the spine themable. Three writes hold the spine up — `colorByPoint: False`, the per-point
+seeding, and `_themed`'s `color` — and each fails DIFFERENTLY, which an earlier draft of this
+passage got wrong by saying they all revert it to `#cccccc`. Only the first does (2,703 px of
+foreign light grey, pixel-measured on a 1000x420 PNG). Dropping `_themed`'s `color` leaves the
+series on `colors[0]`, so the spine comes out palette **blue** — themed-looking and wrong, the
+failure a hex-substring test is least able to see. Dropping the seeding leaves the spine slate and
+flattens every marker to one hue. Edit one, run all three mutations.
+
+The hook is also deliberately **not** a seventh seat in the border-dissolve tuple, which is where a
+"consistency" edit would put it, and the reason is a lesson about *tests* rather than about
+timelines. That tuple writes `plotOptions[type]["borderColor"]`, and `borderColor` is one of the
+keys highcharts-core silently DROPS for timeline — so joining it would be a hook that looks right,
+serializes to nothing, and **still passes** a test asserting `_DARK_CHROME["bg"]` appears in the
+emitted JS, because `_themed` writes that hex on every chart it touches. That is this repo's own
+dark-mode-test hole (a test that passed with the hook it existed for deleted outright) reappearing
+one type over: a hook must be pinned at its **path**, never as a bare hex substring. The tuple
+stays at **six**. What the hook writes instead is three things, all measured off rendered PNGs
+rather than inferred from the line-series base class: the spine to the **axis** colour — a series
+`color` reaching something that is chrome by role, since a spine is the thing the marks sit *on*,
+which is why the write does not make this the hook that "moves a MARK" (with bullet's fossil flip
+gone, `_themed` writes chrome and border dissolves and nothing else: every value it sets is either
+a chrome colour or a mark's border matched **to** the background) — the 2px ring around each marker
+dissolved
+into the background (column/bar's white-`var()` case arriving through a different element), and the
+dataLabel **card**, which is pie's and funnel's case rather than treemap's `contrast`: the labels
+sit on the chart background, and unthemed they are white cards with `#999999` borders and `#333333`
+text floating on navy. The label→mark **connector** needs no write, and that is luck worth
+recording rather than a decision: it defaults to the POINT's colour, so it comes out a
+`DEFAULT_COLORS` hue and reads on navy — `connectorColor` is dropped at both levels, so had the
+default been a neutral grey there would have been no fix available at all.
+
+`type: "datetime"` on the x axis **is** the chart, not a formatting nicety: on the same epoch-millis
+array, without it Highcharts inflates every mark into a wide coloured band and prints raw 13-digit
+integers across the bottom (both rendered). It is set unconditionally, because `_timeline_events`
+has already refused every column that is not a date — xrange's `if is_datetime` with the other half
+deleted, which is precisely what `date_columns` buys. And there is **no `xAxis.labels.format`**,
+ever — but the rule behind that is about the **value**, not the key, and stating it the other way
+round is what makes it a trap rather than a footnote. `{"format": "{value:%b %Y}"}` serializes as
+`format: {value:%b %Y}`, a bare brace-block where JS wants a string, so the iframe dies on a blank
+page while the export server rasterizes the PNG perfectly — a divergence no options-dict test can
+see, and the same class of bug `_LIGHT_COLOR_SCHEME_CSS` exists to close. What triggers it is that
+the string **opens with `{`, closes with `}`, and carries at least as many colons as brace-pairs**,
+which `js_literal_functions.is_js_object` reads as a JavaScript object literal and writes through
+unquoted. The colon COUNT is the rule, not the presence of a colon: a string with too few falls
+through to that function's `esprima` path, which parses `const testName = <the string>` and refuses
+anything that is not an `ObjectExpression`. It happens on **any key and any axis**. Measured on the
+round-trip:
+
+| Value | Emitted |
+|---|---|
+| `xAxis.labels.format` = `{value:%b %Y}` | `format: {value:%b %Y}` — **unquoted** |
+| `xAxis.labels.format` = `{value}` | `format: '{value}'` |
+| `dataLabels.format` = `{point.y:.1f}` | `format: {point.y:.1f}` — **unquoted** |
+| `dataLabels.format` = `{point.name}` | `format: '{point.name}'` |
+| `tooltip.pointFormat` = `{point.x:%Y-%m-%d}` | `pointFormat: {point.x:%Y-%m-%d}` — **unquoted** |
+| `tooltip.pointFormat` = `<b>{point.name}</b><br/>{point.x:%Y-%m-%d}` | quoted |
+| `dataLabels.format` = `{point.name}: {point.y}` | quoted — 2 pairs, 1 colon |
+| `dataLabels.format` = `{point.name}: {point.y:.1f}` | `format: {point.name}: {point.y:.1f}` — **unquoted** |
+
+So this entry's own tooltip is safe **only because it opens with `<b>`**, not because tooltip keys
+are exempt — an edit that "simplifies" it by dropping the markup walks straight into the trap, and
+the markup is carrying more weight in the `%H:%M` precision than in the `%Y-%m-%d` one, since the
+widened format adds a second colon against the same two brace-pairs
+(`test_timeline_tooltip_keeps_the_time_when_the_data_carries_one` asserts the emitted JS quotes
+it, for exactly that reason), and
+this file said for one release that `dataLabels`' and the tooltip's `format`/`pointFormat` were
+"quoted correctly", which cleared exactly the two values that break. The
+`{point.name}: {point.y}` that pie, funnel and pyramid all share is the narrowest escape in the
+module, and it ILLUSTRATES the counting
+rule rather than escaping it: it opens and closes with braces and carries a colon, and survives on
+the arithmetic — two brace-pairs against one colon, so `is_js_object` falls through to its
+`esprima` path, which then refuses to parse it. The margin is **one colon**, and it is live rather
+than theoretical: adding a precision (`{point.name}: {point.y:.1f}`) makes it two against two and
+sends it through bare, as the last table row shows. That is why
+`test_no_supported_type_emits_an_unquoted_format_object` greps the **emitted JS** across every
+supported type rather than policing a list of keys, and why its pattern is
+`[A-Za-z]*[Ff]ormat:\s*\{` rather than the literal `format: {` — the key this module emits on
+nearly every tooltip is `pointFormat`, whose capital `F` a literal search would miss outright,
+which is to say it would miss exactly the case this paragraph warns about. The check was already
+value-shaped, and only the prose around it was key-shaped.
+
+The `Date` prefix is the **second** member of that divergence class, and unlike the first it is
+not a rule this module can follow its way out of — it is a library bug this project chose to
+document rather than paper over (the reproduction and the argument:
+[`decisions.md`](decisions.md#the-strings-highcharts-core-emits-unquoted)). `js_literal_functions`
+writes any string beginning `Date` — except exactly `"Date"` — through as raw JavaScript, so a
+chart titled `Dates that mattered`, a column named `Date added`, or an event called
+`Dates finalised` each blanks the iframe while the PNG comes back perfect. It is **case-sensitive**
+(the sample's own lowercase `date` column is safe, `Date added` would not be) and it is
+type-agnostic and pre-existing, but a timeline raises the exposure sharply because its required
+column is semantically a date and `Date added` / `Dates` / `DateTime` are all natural headers.
+`test_a_string_beginning_with_date_is_emitted_unquoted_by_the_library` pins it against the pinned
+highcharts-core — asserting the bug is still **there**, which is how a repo that chose to live with
+something finds out when it changes.
+
+`categories` is the other
+tempting key and is worse still: with named points it throws `TypeError: a.indexOf is not a
+function` and blanks the chart. A timeline and a category axis are incompatible.
+
+The y axis is hidden with **both** keys, and both are load-bearing. Omitted entirely, Highcharts
+draws an axis titled "Values" with a single tick at 1 — measuring nothing, since a timeline point
+has no y — and shifts the plot area right to make room for it. `visible` removes it; the
+**empty-string** title is what keeps it removed, and is not the `{"text": None}` this module warns
+about elsewhere, since `None` does not clear a Highcharts axis title, it makes highcharts-core drop
+the key and the default comes back. The tooltip lives under `plotOptions.timeline` rather than at
+the top level, and here that is Highcharts' **precedence** rather than highcharts-core's dropping —
+sankey's `nodeFormat` rule in mirror: `plotOptions.timeline.tooltip.pointFormat` carries a built-in
+default of `{point.description}`, and a series-level default BEATS a top-level tooltip, so a
+top-level `pointFormat` would serialize perfectly and then never be read, drawing an empty box on
+every hover. Its token is xrange's `{point.x:…}`, and unlike bullet's and dumbbell's it is
+**not** labelled with the column name: that rule exists because a nulled slot renders as nothing
+and a run-together format trails off mid-sentence, and a timeline has no nulled slots. `{point.y}`
+must never appear — Highcharts assigns every timeline point `y = 1` internally, so it would print a
+meaningless "1" rather than nothing.
+
+Its **precision follows the data**, which makes it a decision about the READING rather than
+about formatting — and the reason is that this tooltip is the **only place a timeline states the
+instant**. The ticks are months, the marks are points with no extent, the dataLabels carry the
+event's *name*, and there are no categories and no legend: most types state a value in at least
+two channels, so a tooltip there is a convenience, while here there is no second reading to
+correct a wrong one. (Bubble's size and variwide's width are tooltip-only too, and get off
+lightly for a reason that generalizes: a number reaches a tooltip as itself, while a date reaches
+it as the output of a **format string** — which is exactly where granularity is discarded.)
+`date_columns` admits an ISO-8601 column with a clock time in it — as it
+should, nothing about `2026-01-12T09:30:00Z` fails a date sniff — and under a fixed `%Y-%m-%d` a
+deploy starting 09:30 and ending 17:45 drew two marks at two distinct coordinates whose tooltips
+both said `2026-01-12`. So `_timeline_events` returns a **3-tuple**, `(points, sub_day, problem)`
+(`_xrange_bars`' 4-tuple precedent), and the branch picks `_TIMELINE_INSTANT`
+(`%Y-%m-%d %H:%M`) or `_TIMELINE_DAY` (`%Y-%m-%d`) from it. Four things about that are
+load-bearing. `sub_day` is **returned rather than derived by the caller**, because it is a
+column-level fact about the coerced values while the caller holds only the point dicts, whose
+`x` is typed `object`. It is `any(when % _MILLIS_PER_DAY ...)` — a date parses to exact midnight
+UTC, so a non-zero remainder IS a time, read off values already coerced rather than by parsing
+the strings a second time. The question is asked in **UTC**, the frame the marks are placed in,
+so a column of `+05:30` midnights reads as instants (round-tripped) — correctly, since 18:30 the
+previous day is where the mark actually sits. And the answer is a **column policy, not a
+per-point one**: `pointFormat` is one string per series, so a single timed row widens every
+tooltip in the chart (round-tripped), which is right — a column with an instant in it is a
+column whose readings are instants. Widening it unconditionally is the wrong trade the other
+way, and the milestone case is the commoner one: every tooltip would trail a meaningless
+` 00:00` that a reader cannot distinguish from a real midnight. The argument in full, and the
+rule it generalizes to:
+[`decisions.md`](decisions.md#tooltip-precision-when-a-channel-is-a-values-only-home).
+
+The **dataLabels key is absent, and here the absence is the decision rather than the gate** —
+this type's one inversion of the module's habit. Everywhere else labels default off and the builder
+turns them on behind a count gate (heatmap's cells, sankey's links, waterfall's steps, sunburst's
+sectors); a timeline's default **on**, and Highcharts' own formatter is already the right chart: a
+colour bullet and the event name, alternating above and below the spine with connectors. A `format`
+would REPLACE that formatter and cost both the bullet and the bold. Nor could a finer knob exist —
+`alternate`, `connectorWidth`, `connectorColor` and `width` are silently dropped at **every**
+level, and `distance` at the `plotOptions` and point levels — but `distance` **does** survive on
+the SERIES, and it moves the label (verified by round-trip and by rendering). So the stagger is
+reachable, just not from here, and it is left alone because Highcharts' own spacing reads at every
+density tried rather than because there is no knob. The legend is off as belt and braces rather than for
+xrange's/columnrange's/bullet's/dumbbell's grey-bullet reason, which does not transfer: a
+Highcharts timeline series already defaults to `showInLegend: false`, so removing the key leaves
+the chart byte-identical (verified). It is spelled rather than inherited for `colorByPoint`'s
+reason, and the reading holds anyway — every event carries its own name in its own label. The
+series is named for the DATE column — there being no value column — which
+reaches only the tooltip header this type blanks, so it is documentation rather than chrome.
+
+Two guards it does **not** have are worth naming. There is no `end_col`-style second-column guard
+because there is no second column, and there is **no x-in-y guard**: `x_col == y_cols[0]` merely
+names every event by its own date, which is drawable and honest, so it is tolerated exactly as
+scatter tolerates it, and the *absence* is what should be pinned. Its marks are the events, so it
+takes a `count_marks` rule and a `MARK_METRICS` entry (**"Events"**) — never exceeding its row
+count, since nothing is appended (xrange's case, not sunburst's), and **0** for a date column that
+is not dates, because a chart that draws nothing counts nothing. Pulls in `modules/timeline` from
+`chart.type` alone, with **no** prerequisite and no `_MODULE_LOAD_ORDER` entry), and
 `solidgauge` (concentric
-rings on one shared dial — an "activity gauge", and the only type with **no label channel
-at all**. Every other type names its marks from a column: a slice, an axis category, a
-node, a box, a lane. A gauge's marks are the **selected columns themselves**, each
-*reduced* to one number — so `x_col` names nothing, is `None`, and the column role that
-seventeen types took for granted stops being universal. It is therefore also the first
-type whose marks are neither in the frame (as every pointwise type's are) nor assembled
+rings on one shared dial — an "activity gauge", and the **first** type with **no label channel
+at all** (the needle below is the second, and inherits every consequence in this paragraph
+unedited — which is the family's whole point). Every type outside that family names its marks
+from a column: a slice, an axis category, a node, a box, a lane, an event. A gauge's marks are
+the **selected columns themselves**, each *reduced* to one number — so `x_col` names nothing,
+is `None`, and the column role every other type takes for granted stops being universal. It is
+therefore also the first type whose marks are neither in the frame (as every pointwise type's are) nor assembled
 from it (as sunburst's tree is) but **reduced** from it: the second aggregating type after
 boxplot, and the first whose row count has no bearing on its mark count at all.
 
@@ -964,6 +1319,13 @@ tidy. The exception is not merely vacuous — that is the sharper point. A row f
 *aggregating* branch does not drop a MARK, it silently changes a **NUMBER**: filter three
 rows out of thirteen because their (unused) label cell happened to be blank, and the total
 comes back smaller, drawn confidently, with nothing on the page saying so.
+
+`timeline` returns above that filter too, and the two reasons are worth keeping apart because
+they generalize differently. Gauge is up there because it has **no label channel** to filter on;
+timeline has one and still returns early, because `_timeline_events` must be handed the same raw
+frame `count_marks` hands it — so the column-kind sniff inside sees the column `date_columns` saw,
+not one some other column had already shortened. Nothing is lost by returning early: the helper
+applies `_label_ok` itself, so the rows still drop, decided in one place instead of two.
 
 Each ring is its own **series**, and that is forced rather than chosen. The canonical
 Highcharts activity gauge is ONE series whose N points each carry their own `radius` — and a
@@ -1275,7 +1637,8 @@ not merely the format string that used to hide the absurd number.
   links for a networkgraph, reports for an organization,
   boxes for a boxplot, steps for a waterfall, sectors for a sunburst, bars for an
   xrange, ranges for a columnrange, points for an **arearange** (its band's vertices), measures for
-  a **bullet**, bars for a **variwide**, changes for a **dumbbell** — sourced
+  a **bullet**, bars for a **variwide**, changes for a **dumbbell**, events for a **timeline** —
+  sourced
   there
   rather than recomputed
   here so it can't drift from what the chart draws; waterfall's and sunburst's are the
@@ -1298,11 +1661,18 @@ not merely the format string that used to hide the absurd number.
   the bar rather than a second mark beside it, which is precisely what bullet's noun exists to
   say and variwide's therefore must not. **Dumbbell** reaches that same number by a **fourth**
   argument — neither channel can drop a row because a half-pair draws *nothing at all*, so there is
-  no partial mark a count could disagree about — and its noun, **"Changes"**, is the one in this set
-  that names neither a shape nor a pairing of shapes: a dumbbell draws THREE things per category
+  no partial mark a count could disagree about — and its noun, **"Changes"**, was the first in this
+  set to name neither a shape nor a pairing of shapes: a dumbbell draws THREE things per category
   (two markers and the connector joining them) and counts none of them, only the one before-to-after
   movement they jointly describe. Variwide could take "Bars" back precisely because it draws a
-  single rectangle; here there is no one shape left to name;
+  single rectangle; here there is no one shape left to name.
+  **Timeline**'s **"Events"** is the second noun of that kind, and it is why the type joins the
+  Measures/Changes row of `CLAUDE.md`'s table rather than xrange's Bars/Ranges/Points row, which its
+  coordinate column would otherwise suggest: it too draws three things per mark (a marker, its
+  label, and the connector between them) and counts none of them, only the dated event they
+  jointly report. Its count reaches that number by a **fifth** argument again — not "neither
+  channel can drop a row" but the opposite, that *both* channels drop and the count is the whole
+  build's own output, so the KPI is `len(points)` by construction;
   membership of the `MARK_METRICS` dict is what makes a type count-adaptive, so the
   KPI stays one branch however many such types there are — and gauge is the first type
   whose *absence* from that dict is a decision worth stating: its marks ARE its series
@@ -1323,6 +1693,50 @@ not merely the format string that used to hide the absurd number.
   was even drawn. Xrange's Start/End pickers are likewise sourced from the builder's
   `coordinate_columns`, not from `numeric_cols` (which cannot see a date) nor from
   `df.columns` (which would offer a column of task names the builder can only reject).
+  **Timeline** then made that gate a **rule** rather than an exemption, by needing a
+  requirement of its own that is *stricter* than xrange's rather than a share of it:
+  `date_columns` is `coordinate_columns` minus the numbers, so a frame with numbers and no
+  dates passes xrange's test and must fail this one. Under a shared `coord_cols` test the
+  app's own landing dataset (revenue, cost) would sail straight through and land the Date
+  picker on `revenue`, and the app would then have to explain that revenue does not read as
+  dates — where the honest answer is that this dataset has no dates at all.
+
+  The gate is therefore a **table**, `vocabularies`, and not three hand-written arms. One row
+  per column **vocabulary**, each carrying four things: the family constant, the source list,
+  the message for *the frame has none of these*, and the message for *you have selected none of
+  these*. `UNWEIGHTED_NODE_LINK_TYPES` carries `None` in the source slot, which reads as
+  **exempt** rather than as empty — those two types read their columns as node and title labels
+  and need no plottable column at all — and every type in no row at all falls through to the
+  numeric default. What the table replaced is worth recording, because it is the failure the
+  shape prevents: three hand-written arms **plus** a chain of `chart_type not in …` clauses
+  guarding the numeric one — one clause per exempt family — so
+  adding a type meant **two** independent edits, and forgetting the second was silent — the type
+  passed its own arm and was then refused by the numeric one, with a message about a requirement
+  it does not have. A row cannot be half-added.
+
+  The **single-select Y control's source** is then that same row (`y_source`) rather than a
+  second three-way branch beside it (the multi-select branch takes the table's default,
+  `numeric_cols`) — three arms here beside three arms there being exactly the shape that lets
+  two sites drift — so "the picker can never offer a column the builder would refuse" is
+  **structural**: the control offers precisely the list the gate has already proven non-empty
+  for this type. The **empty-selection warning** comes off the row too, which is the same defect
+  fixed one guard further down: it read "Pick at least one numeric column to plot" for every
+  type, which is plainly wrong for the two whose Y is a **coordinate**, so xrange now asks for
+  "a date or number column for the bar's start" and timeline for "a date column to say when each
+  event happened". Both source lists come from **one** `picker_columns(df)` call, not from two
+  helpers that each re-sniff every column (see [the builder's helpers](#the-builders-helpers)).
+  And `keep_picker_state()` runs in front of the gate's `st.stop()`, because Streamlit
+  garbage-collects the session-state entry of any keyed widget a run does not instantiate and
+  this gate stops *above* the keyed X and Y pickers — the third distinct way a keyed picker
+  loses its answer, measured and written up in
+  [`decisions.md`](decisions.md#keyed-widgets-the-third-way-a-picker-loses-its-answer).
+  Timeline's own two controls are relabelled
+  and nothing is added: **Event labels** for X and **Date (when)** for Y, the parenthetical
+  doing the work "Target (to)" and "Goal (target)" do — this is the slot where every other
+  type in the app asks HOW MUCH, so the word that has to survive a skim is the one saying it
+  asks something else. Single-select, for the extra-column family's reason read one type over:
+  a second date column would be a second instant per row, which is an xrange (two coordinates
+  ARE a span), not a second timeline.
 
 ## The builder's helpers
 
@@ -1354,10 +1768,34 @@ not merely the format string that used to hide the absurd number.
   whole-axis lie. So nothing is dropped, nothing raises, and there is no `explain_bullet_error` to
   write. Its one guard (`measure == goal`) is a *column*-level collision, not a contradiction the
   data states.
+  `timeline` adds no fourth either, and its route there is the **opposite** of bullet's, which is
+  what makes the pair worth reading together: bullet has no contradiction to explain, while a
+  timeline **has** one (`_TIMELINE_NOT_A_DATE`, which `build_options` really does raise) and has
+  made it **unreachable** from the app instead, by narrowing the picker that feeds it. Two ways to
+  not need an `explain_*`, and the second is the better one wherever it is available: a
+  contradiction the UI cannot express costs no message, no warning, no test of the message, and
+  cannot drift from the error it stands in for — because there is nothing to drift.
   Then `coordinate_columns()`, the
-  builder's own answer to "which columns can place a bar on an axis" — exported so the
-  app's Start/End pickers cannot offer a column the builder would refuse, which is the
-  can't-drift rule applied to *which options appear in a widget* — and its gauge counterparts
+  builder's own answer to "which columns can place a bar on an axis" — the can't-drift rule
+  applied to *which options appear in a widget*, so a picker cannot offer a column the builder
+  would refuse — and `date_columns()`, that
+  same answer narrowed by one kind for timeline's Date picker (dates only, never plain numbers,
+  with `_COORD_EMPTY` **included** since an empty column makes no claim about any axis and a
+  header-only CSV is missing data with a right answer). The narrowing is not a convenience: it is
+  what buys the type its missing `explain_*`, since a widget that cannot offer a losing column
+  leaves nothing to explain. Both of those are now thin wrappers over `picker_columns()`, which
+  answers **both** pickers from **one** sniff of the frame and returns the pair
+  `(coordinate columns, date columns)` — which is what the app now calls, leaving the two wrappers
+  for the pure-API caller and their own tests. Two reasons, and the second is the better one. The
+  **cost**: `_coordinates` runs a `to_datetime` *and* a `to_numeric` coercion per object column,
+  the sidebar's most expensive operation on a wide uploaded CSV, and the app was paying it twice
+  on every rerun — a slider drag, a title keystroke — for every chart type, including every type
+  that reads neither list. The **shape**: the two lists are now one membership test apart, against the
+  named kind tuples `_COORDINATE_KINDS` and `_DATE_KINDS`, so "a date column is always a
+  coordinate column" holds **by construction** rather than by two comprehensions agreeing —
+  `_DATE_KINDS` is a literal subset, and `_COORD_EMPTY` sits in both because an empty column makes
+  no claim about any axis. That is the same move the family constants at the top of the module
+  make, applied to a pair of functions instead of a pair of branches. Then its gauge counterparts
   `GAUGE_AGGREGATIONS` (the same rule applied to a **policy**: the app can never offer a
   reduction the builder would reject) and `gauge_dial()` (the same rule applied, for the first
   time, to a widget's **value** rather than to its options: the Dial min/max inputs are *seeded*
@@ -1375,7 +1813,7 @@ not merely the format string that used to hide the absurd number.
   boxes, a waterfall's steps, a
   sunburst's sectors, an
   xrange's bars, a columnrange's ranges, an arearange band's points, a bullet's measures, a
-  variwide's bars, a dumbbell's changes — funnel/pyramid counting
+  variwide's bars, a dumbbell's changes, a timeline's events — funnel/pyramid counting
   `label_ok & value_ok` exactly
   like treemap, columnrange counting by label like waterfall minus the
   appended total, organization counting `label_ok & not _is_top_level(mgr)` — its own second
@@ -1394,12 +1832,19 @@ not merely the format string that used to hide the absurd number.
   funnel-beside-treemap pattern read backwards)
   for the app's KPI
   row — reusing the same `_label_ok`/`_plottable` drop predicates so the count can't
-  drift from the chart (sunburst and xrange go further and reuse their *whole* build, for
-  two different reasons: sunburst's drops are not a per-row mask at all, since a node's fate
-  depends on its *ancestors* and its *descendants*; while xrange's drops *look* per-row but
-  are read through a **column**-level fact — the axis kind — and `build_options` reaches its
-  branch on the `_label_ok`-*filtered* frame while `count_marks` runs on the *raw* one, so a
-  predicate-only reuse would sniff a different axis than the chart drew). Gauge has **no rule**
+  drift from the chart (sunburst, xrange and timeline go further and reuse their *whole* build,
+  for two different reasons rather than three: sunburst's drops are not a per-row mask at all,
+  since a node's fate depends on its *ancestors* and its *descendants*; while xrange's drops
+  *look* per-row but are read through a **column**-level fact — the axis kind — and
+  `build_options` reaches its branch on the `_label_ok`-*filtered* frame while `count_marks` runs
+  on the *raw* one, so a predicate-only reuse would sniff a different axis than the chart drew.
+  Timeline is the third and takes **xrange's** argument one coordinate short: whether the date
+  column IS a date column is the same column-level fact, read by the same `_coordinates`. It
+  answers the two-frames problem the other way round, though — rather than making the helper
+  produce identical output from either frame, it removes the second frame, since its
+  `build_options` branch returns *above* the shared `_label_ok` filter and the sniff reads the
+  whole `df[date_col]` regardless. Its branch needs no new argument to do it, since a
+  timeline's second column is `y_cols[0]`). Gauge has **no rule**
   in `count_marks` at all, and raises exactly as `line` does: its marks ARE its series, so
   `len(y_cols)` is an invariant, and a rule that only restated it would be the can't-drift rule
   run *backwards* — a second computation of a fact that cannot differ from the first.
@@ -1486,9 +1931,32 @@ not merely the format string that used to hide the absurd number.
   column is the **third**, so the app's Title control defaults to it and the cards show without a
   click, and `tenure_years` is a throwaway numeric column (ignored by the chart, carried so the
   roster clears the no-numeric-columns gate — the `_service_dependencies`/`calls_per_min` rule).
-  Every sample leads with a **category column**, and that is load-bearing rather than tidy: the app
-  opens on `line` with the first column as X, so a numeric first column would trip the x-in-y guard
-  the moment the dataset was selected.
+  `Company milestones (timeline)` is `Product release plan (xrange)`'s mirror on the axis those two
+  types actually differ along, and it is the mirror in this file with **no** magnitude column on
+  either side: both samples carry dates and neither carries a magnitude in its value slot, but
+  a release plan's rows have EXTENT (a start and an end, so the mark is a bar) and a milestone list
+  has none (one date, so the mark is a point). Reading them side by side is what shows that is a
+  difference in the DATA rather than in the drawing — which is why the two share a spare column
+  NAME (`headcount`) on purpose: they differ in their coordinate shape and in nothing else. Its
+  dates are ISO-8601 **strings**, the release plan's reason exactly (that is what `pd.read_csv`
+  hands back, so the sample exercises the real `_coordinates` sniff rather than a pre-parsed
+  `datetime64` no CSV upload could produce), and its gaps are deliberately **irregular** — six
+  weeks, then two, ten, six, fourteen, six — because a timeline's whole claim is that distance on
+  the page is distance in time, so evenly spaced events would draw the chart a category axis draws
+  and hide the one thing worth checking by eye. The two-week pair is also what forces the labels to
+  stagger. One incidental fact about it is worth knowing before anyone "tidies" the header: its date
+  column is spelled lowercase `date`, which is safe, while `Dates` or `Date added` would blank the
+  interactive chart outright — the library emits any string beginning `Date` as raw JavaScript,
+  sparing only the exact string `"Date"`. See
+  [`decisions.md`](decisions.md#the-strings-highcharts-core-emits-unquoted).
+  Every sample **but one** leads with a **category column**, and that is load-bearing rather than
+  tidy: the app opens on `line` with the first column as X, so a numeric first column trips the
+  x-in-y guard the moment the dataset is selected. The exception is `Height vs weight`, the scatter
+  sample, which leads with the int64 `height_cm` and does exactly that — it is the standing
+  counterexample, not a shape to copy. For a timeline the rule is load-bearing **twice over**, and
+  the second reason has nothing to do with the landing type: the event NAME is also the mark's
+  entire identity (a timeline has neither axis categories nor a legend), so a frame whose first
+  column were the date would draw a chart labelled with dates in both channels.
 
 ## The test suite, type by type
 
@@ -1552,12 +2020,79 @@ not merely the format string that used to hide the absurd number.
   Python `None` — the module's one `EnforcedNull` carve-out — pinned by a test that drives
   `make_chart` rather than `build_options`, the only layer at which a `CannotCoerceError` one
   layer below `build_options` is observable at all; the `targetOptions.color` that closes the
-  crossbar trap, and its dark-mode **flip**, the one `_themed` hook that moves a MARK; the fifth
-  seat in the border-dissolve tuple; the single hue with `colorByPoint` asserted NOWHERE — the one
+  crossbar trap — a **fill plus a border**, both fixed constants in `build_options` and neither one
+  a `_themed` write, pinned as the PAIR they are legible as; the fifth
+  seat in the border-dissolve tuple, which is bullet's only `_themed` involvement; the single hue
+  with `colorByPoint` asserted NOWHERE — the one
   such pin guarding a real decision, since bullet's *survives* the round-trip at both levels; the
   absent `yAxis.plotBands`; the measure-required and measure≠goal guards and the shared x-in-y one;
   `count_marks` agreeing with the built length; and `modules/bullet` resolved from `chart.type`
   alone, with no `highcharts-more`),
+  timeline's dated events — where what has to be pinned is unusual, because most of this type's
+  decisions are **absences** and the module's dominant `assert "…" in js` idiom can see none of
+  them. The unquoted `format:` object that must appear NOWHERE — swept over every supported type
+  rather than pinned on this one, because the trigger is a property of the SERIALIZER and of the
+  VALUE (a string opening `{`, closing `}` and carrying **at least as many colons as
+  brace-pairs**) rather than of any key, so a correct chart is one the sweep's
+  `[A-Za-z]*[Ff]ormat:\s*\{` pattern finds nothing in — the pattern and not the literal
+  `format: {`, which would miss `pointFormat` outright — and the iframe/PNG divergence it
+  causes is invisible to any options-dict assertion; the sibling
+  `test_a_string_beginning_with_date_is_emitted_unquoted_by_the_library`, which pins a LIBRARY BUG
+  as still present rather than as fixed, on the three channels an ordinary user reaches it through
+  (a chart title, a column name, a point's own label); the absent `categories`, which
+  throws `TypeError: a.indexOf is not a function` on named points; the absent `dataLabels`, which
+  here is the DECISION and not a gate; and the absent x-in-y guard, since `x_col == y_cols[0]`
+  merely names every event by its own date — drawable and honest, so the *tolerance* is the thing
+  to pin, exactly as scatter's is. The `_themed` spine needs **two** mutations rather than one,
+  since it is the module's first hook with a precondition in the build branch: three
+  writes hold the spine up and each fails differently — only `colorByPoint: False` restores
+  `#cccccc`, dropping `_themed`'s `color` leaves it palette blue, and dropping the seeding
+  flattens the markers — so a test that only removes the hook proves a third of the mechanism. The
+  `borderColor` this type would otherwise have joined the border-dissolve tuple with is the
+  sharpest case of all, and the reason it is stated here rather than in the entry alone: the key
+  is silently dropped for timeline, so the hook would set nothing while `_DARK_CHROME["bg"]` stayed
+  in the emitted JS anyway — a hook must be pinned at its **path**, never as a bare hex substring.
+  Then the positives: the epoch pin it shares with xrange, the tooltip under
+  `plotOptions.timeline` rather than at the top level (where a built-in series default would beat
+  it at render time while serializing perfectly), the nameless and dateless rows dropped, a
+  `_COORD_EMPTY` date column drawing an empty chart rather than raising, and the
+  `count_marks`-equals-the-built-length reuse.
+  `test_timeline_pulls_in_its_own_module` closes a gap this inventory had already claimed was
+  covered — `modules/timeline` from `chart.type` alone, with no `highcharts-more` and no
+  `_MODULE_LOAD_ORDER` entry — and which nothing pinned: the string `modules/timeline` appeared
+  nowhere in the suite, while every other type whose module is resolved from `chart.type` had
+  its own script-tag test (the gauge family is the near-miss: it pins `highcharts-more` through
+  `get_required_modules()` rather than through the emitted tags). It is
+  the interactive path alone that can fail here, which is why it went unnoticed in the first place:
+  `build_options` validates, `to_js_literal` serializes, and the export server renders the PNG
+  perfectly, because it is handed the options and never these tags. A doc claim is not a pin, and
+  an inventory of tests is exactly the prose most likely to assert one anyway.
+  That one was a review's finding as well, and it is what the tests named in this paragraph have
+  in common: a **render** or a **review** saw what the suite could not. (The type's routine pins —
+  that it builds, that it refuses a non-date column, that the sample drives it — are ordinary.) `test_timeline_never_refuses_a_column_its_own_picker_offered` states the invariant the
+  picker's promise reduces to — `date_columns` and `_timeline_events` never disagreeing about a
+  column — on the frame that once broke it, where a label column of mostly-blank names flipped the
+  majority vote between a raw sniff and a filtered one and the app answered a CSV upload with a
+  traceback. `test_timeline_draws_its_events_in_date_order_whatever_the_row_order` pins the sort,
+  and pins the two things a "just sort it" edit would miss: that it runs BEFORE the hue seeding
+  (or the palette stays scrambled while the console warning goes away) and that it is STABLE,
+  so a tie keeps its row order.
+  `test_timeline_tooltip_keeps_the_time_when_the_data_carries_one` pins **both** precisions, and
+  the day form is half the test rather than a control: widening unconditionally is the failure in
+  the other direction, so a test that only asserted `%H:%M` would license it. It also asserts that
+  the two timed marks really do sit at distinct coordinates — the defect was a **reading**, never a
+  placement, and a test that did not say so would leave the next reader repairing the wrong
+  layer — and that the widened format still reaches the JS **quoted**, since it is one colon
+  nearer the unquoted-object trap than the day form.
+  Beside them, `test_picker_columns_answers_both_pickers_from_one_sniff` pins the helper the two
+  pickers now share: the pair it returns for a frame carrying one column of each kind, the two
+  wrappers returning exactly its halves (so a caller wanting one list is not paying a different
+  rule for it — the saved sniff is a property of the call site, and what a test can hold is that
+  the answers did not change with it), a
+  row-less frame keeping every column (`_COORD_EMPTY` is in both kind tuples, which is what lets a
+  header-only CSV reach a picker at all), and — the half worth the test — `set(date_cols) <=
+  set(coord_cols)`, the subset relation stated as an assertion rather than left to two
+  comprehensions agreeing,
   the **gauge family's** reduced marks
   (`solidgauge`'s rings: the empty-column
   trap, swept over all six reductions because only `sum` lies; the dial derived from the
@@ -1591,9 +2126,12 @@ not merely the format string that used to hide the absurd number.
   an end-to-end pass driving every supported type through `Chart.from_options` /
   `to_js_literal`) and `sample_data` unit tests, plus headless `AppTest`
   interaction tests. The AppTests find widgets by **label**, not by position —
-  `_pick_sample(app, chart_type)` is the shared body of the seven `_pick_*_sample` helpers, each
-  of which keeps its own name and its own argument for why that type needs a dedicated sample
-  rather than the landing dataset.
+  `_pick_sample(app, chart_type)` is the shared body of **one `_pick_*_sample` helper per type
+  that cannot be driven from the landing dataset** (stated as a rule rather than as a count, since
+  the count grows with the type list and nothing but a reader can check it), each of which keeps
+  its own name and its own argument for why that type needs a dedicated sample. Timeline needs one
+  for the strongest version of that reason: the landing dataset has no date column at all, so its
+  gate fires and the app stops before a chart is drawn.
 
 And what `tests/test_smoke.py` pins, in detail:
 
@@ -1708,9 +2246,13 @@ all-or-nothing slot in mirror; the goal's Python **`None`**, the module's one `E
 carve-out, pinned by a test that drives **`make_chart`** rather than `build_options` — the only
 layer at which `CannotCoerceError` out of `target`'s `validators.numeric` is observable at all, the
 `_NEEDLE_DIAL` lesson in a different validator — plus the mixed `[EnforcedNull, None]` array
-serializing to `[null, null]`; `targetOptions.color`, the crossbar-contrast fix, and its dark-mode
-**flip**, the one `_themed` hook that moves a MARK rather than chrome, asserted on both themes;
-the border dissolve that makes bullet the fifth member of that literal tuple; the single hue with
+serializing to `[null, null]`; `targetOptions.color` and `borderColor`, the crossbar-contrast fix,
+asserted as the **pair** a mark crossing two surfaces has to be legible as rather than hex by hex —
+and asserted where they are actually written, which is `build_options`: they are constants, not a
+`_themed` flip, and the "asserted on both themes" this line used to claim died with the second
+theme in `0.18.0`;
+the border dissolve that makes bullet the fifth member of that literal tuple — its only appearance
+in `_themed`; the single hue with
 `colorByPoint` asserted NOWHERE — the one such pin guarding a real *decision*, since bullet's
 survives the round-trip at BOTH levels, so nothing but the choice keeps it off — and the *absent*
 `yAxis.plotBands`, a pin on a mark the data never made; no numeric key under `targetOptions` at
@@ -1758,11 +2300,18 @@ heatmap the `modules/heatmap` module, treemap the `modules/treemap` module,
 funnel and pyramid the `modules/funnel` module (shared, from `chart.type` alone — and *not*
 `highcharts-more`, the plausible guess the round-trip corrects, as it does for columnrange),
 sankey the `modules/sankey` module, sunburst the `modules/sunburst` module, xrange the
-`modules/xrange` module, bullet the `modules/bullet` module (those three alone among the
-extra-module types needing *not* `highcharts-more` — and bullet alone among *them* needing no
-`_MODULE_LOAD_ORDER` entry either, since `bullet.js` requires only `highcharts`, unlike
-dependency-wheel's and organization's `modules/sankey` and solid-gauge's `highcharts-more`),
-and gauge `modules/solid-gauge` **plus** `highcharts-more` — which is the
+`modules/xrange` module, bullet the `modules/bullet` module, variwide the `modules/variwide`
+module and timeline the `modules/timeline` module (each of those from `chart.type` alone and
+*without* `highcharts-more` — pulling it in is the plausible guess, and the round-trip keeps
+correcting it; among the types that pull a **series module of their own**, only `dumbbell` and
+`solidgauge` need `highcharts-more` as well.
+`_MODULE_LOAD_ORDER` is narrower still: it carries exactly the pairs where one module **extends**
+another, which today is `modules/dependency-wheel` and `modules/organization` after
+`modules/sankey`, so a type that pulls a single self-sufficient module — bullet, variwide,
+timeline — needs no entry at all),
+and `solidgauge` `modules/solid-gauge` **plus** `highcharts-more` — named for the RING and not for
+the family, because the needle resolves `highcharts-more` from `chart.type` alone and pulls no
+series module at all, so this is the
 one module resolution that is not merely proven but *load-bearing*, since it is pulled in by the
 `pane` alone and without it the chart draws an empty SVG in the browser with no error anywhere,
 while the export server renders it perfectly — rather than just
@@ -1810,7 +2359,14 @@ interactive path does not catch, and worth a test because it fabricates the char
 claim rather than merely failing: every bar would sit exactly on its own crossbar and the chart
 would report that every category hit target precisely; plus the
 **type-aware column gate**, driven by an uploaded Gantt CSV with *no numeric columns
-whatsoever*, which must plot as an xrange and must still be refused by `line`).
+whatsoever*, which must plot as an xrange and must still be refused by `line` — and, once
+`timeline` gave that gate a third row, the same frame read from the other end: a dataset with
+numbers and no dates passes xrange's row and must be refused by `timeline`, which is the
+assertion that keeps the two rows from being quietly merged into one `coord_cols` test. Its Y
+control is worth pinning for its **source** rather than its label — `date_columns`, a subset of
+xrange's `coordinate_columns` — and it adds no extra column control at all. That same frame is
+what drives `test_app_a_gate_that_stops_does_not_forget_the_keyed_pickers`, one guard's stop
+being another guard's state deletion — see the keyed-picker paragraph below).
 
 Gauge's two AppTest halves are worth naming, because together they *define* the keyless-widget
 rule rather than merely obeying it. The Dial inputs carry **no `key=`**, and alone among this
@@ -1827,6 +2383,21 @@ leave every ring at ~1% under `mean` (54). A `key=` is precisely how you would *
 a key, `value=` is honoured only on the FIRST render, so the stale number becomes permanent and
 silent. One test pins that a typed dial **survives** an inert rerun (a title edit); its twin pins
 that it is **re-derived** when the aggregation changes.
+
+A `key=` is **necessary and not sufficient**, which is the half that rule does not state and that
+`test_app_a_gate_that_stops_does_not_forget_the_keyed_pickers` exists to hold down. Streamlit
+discards the session-state entry of any keyed widget a run does not **instantiate** — the key
+survives a rerun, but not a run that never reaches the widget — and the no-plottable-columns gate
+above `st.stop()`s in the sidebar *above* both pickers. So visiting a type whose vocabulary the
+current frame cannot satisfy silently forgot X: choose `cost`, switch to `timeline` on the landing
+dataset, switch back to `line`, and it came back `month`. `keep_picker_state()` (naming the three
+keys in `_KEYED_PICKERS` — X, and the pills/multiselect pair that are the same control under two
+commands) re-assigns each stored entry to itself in front of the stop, the documented opt-out.
+That makes **three distinct ways a keyed picker loses its answer**, each with its own fix and its
+own test: re-minting by a label change (the key), filtering of a stale value by `pills`/
+`multiselect` (the reconciliation seed), and this one, garbage collection. The measurement, and
+the rule for the next early stop, are in
+[`decisions.md`](decisions.md#keyed-widgets-the-third-way-a-picker-loses-its-answer).
 
 ## Appendix: the cross-cutting conventions in full
 
@@ -1851,8 +2422,10 @@ that it is **re-derived** when the aggregation changes.
   claims, and each is a claim about *every other type* — including ones that don't exist yet —
   so a new type can make a sentence false in a passage no diff touched, locally correct on both
   sides, with only the *pair* contradicting. Nothing mechanical can see it. Sweep
-  ``grep -noE 'the (one|only) [a-zA-Z*`_.]+ [a-zA-Z*`_.]+' CLAUDE.md`` after adding a type and
-  check each hit against the code. Two were stale when `bullet` landed: waterfall's "the one type
+  ``grep -noE 'the [*_`]*(one|only)[*_`]* [a-zA-Z*`_.]+ [a-zA-Z*`_.]+' CLAUDE.md`` after adding a
+  type and check each hit against the code. The emphasis class is not decoration: this file bolds
+  the very word a claim rests on, and the sweep ran for several releases without it — skipping
+  every ``the **only** …`` in the file, which is to say the strongest claims in it. Two were stale when `bullet` landed: waterfall's "the one type
   needing **two** `_themed` hooks" (bullet is the second), and its "the one type whose mark count
   exceeds its row count" — which `sunburst`'s appended root had falsified long before, while
   sunburst's own passage already said "this is the second such type".
@@ -1862,12 +2435,72 @@ that it is **re-derived** when the aggregation changes.
   the sweep rather than caused by it — boxplot's "the **only** type whose builder *aggregates*",
   which the gauge family had already falsified while gauge's own passage said "the second
   aggregating type". So the sweep catches PRE-EXISTING drift too, not only what you just added;
-  fix what it finds rather than only what your diff caused. Note also that the prescribed grep
+  fix what it finds rather than only what your diff caused.
+  `timeline` proved the point a third time and is the best illustration of it yet, because it
+  added **no kwarg, no guard the app can reach and no new column role**, falsified exactly **one**
+  sentence in a passage its diff never touched — and surfaced **six** that were already false when
+  it arrived. Caused: dumbbell's "**Changes** is the one noun in this set that names neither a
+  shape nor a pairing of shapes", since "Events" is a second. That is the whole of what the diff
+  broke, and the ratio is the argument for running the sweep rather than re-reading your own
+  diff — six to one against the reading that a sweep is a way of auditing your own change.
+  Surfaced, not caused: sunburst's
+  "the **only** type whose marks are not in the data", falsified long before by boxplot's
+  aggregation and the gauge family's reduction; the end-to-end pass's "those three alone among the
+  extra-module types needing *not* `highcharts-more`", false on the very line it was written, since
+  funnel and pyramid are named there as needing none either; solidgauge's "the **only** type with
+  **no label channel at all**", which the needle falsified a release earlier while the needle's own
+  passage was busy calling the family the point; the row-less-cast passage's "Sunburst is the
+  one type that needs no cast of its own", contradicted three sentences later by its own "Gauge
+  needs no cast either"; and the two this file first mis-attributed TO `timeline`, which are worth
+  keeping separate because the error in each is a different one. Waterfall's "the **only** line
+  Highcharts draws between marks" was blamed on the spine, and the spine does not falsify it: this
+  file calls the spine the line every event sits *on*, and a line marks sit on is not a line drawn
+  between them. What did falsify it is `dumbbell`, three releases earlier in `0.17.0` — a connector joining two
+  markers is unambiguously a line between marks — so the repair is to SCOPE the superlative
+  (between two *separate* marks) rather than to name a second line. And variwide's "the one
+  **number** a tooltip is the only home for" was fixed on the **wrong half of the sentence**: the
+  first pass narrowed *number* to *magnitude*, on the reading that a timeline's date is a
+  coordinate, when `bubble` had falsified *magnitude* since `0.2.0` — a `size_col` is a magnitude,
+  on no axis, in no dataLabel, stated only in the tooltip, through the identical `{point.z}` token.
+  Narrowing a superlative is a fix only if the narrowed form is re-run against **every** type
+  rather than against the one that surfaced it; that one now states a shared property with the
+  difference named, which no later type can take away.
+  Two of the surfaced hits sit beside a second error the sweep **cannot** match at
+  all — a stale cardinal ("the column role that seventeen types took for granted") and a stale
+  NAME (a module resolution written as `gauge`'s when it is the ring's alone, the needle pulling no
+  series module) — so a hit is worth reading a paragraph out from rather than stopping at the line.
+  And one hit of a fourth kind is not a uniqueness claim at all but a **name**: `xrange` was
+  described here as a "Gantt-style timeline" until this release made that word a type. Its
+  superlative was still true — checking it is what caught the word. A new type can falsify prose by
+  taking a NOUN, not only by taking a superlative.
+  **And the widening paid for itself on the day it landed**, which this file briefly recorded the
+  other way round. The first pass through the newly visible hits reported that they all checked
+  out; a second pass found that one of them did not, and it was the sharpest kind — bullet's
+  "the **only** `_themed` hook in this module that flips a MARK", bolded and therefore invisible to
+  the sweep for every release it was false. `_themed` has no bullet branch at all; the crossbar's
+  colours are constants in `build_options`, and the flip they described had been deleted with the
+  `dark=` flag in `0.18.0`. So the claim was a **fossil**: prose that outlived its mechanism by two
+  releases in four places (this entry, the two test-inventory lines, and a comment in the builder),
+  while every bullet test stayed green, because none of them asserts what `_themed` does *not*
+  contain. Note what that implies about a "no falsehood found" result — it is the outcome the
+  sweep is least able to defend, since the hits it can see are the ones already checked most
+  often, and a claim can be false in a passage nobody has re-read since the mechanism moved.
+  It also makes waterfall's line above stale a second time and in the opposite direction: it once
+  needed the correction "bullet is the second", and now needs bullet removed from it entirely.
+  Note also that the prescribed grep
   does **not** catch ORDINAL claims ("the fifth member", "the seventh column kwarg") — sweep
-  ``grep -noE 'the (first|second|third|fourth|fifth|sixth|seventh|eighth|ninth)' CLAUDE.md`` as
-  well — and note that this regex is itself a tally that goes stale, since each new type can push an
-  ordinal past the end of it. `dumbbell` made `ninth` reachable; extend the alternation rather than
-  assuming the sweep still covers the top of the range.
+  ``grep -noE 'the [*_`]*(first|second|…|eleventh|twelfth)' CLAUDE.md`` as
+  well (`CLAUDE.md` > Conventions carries the alternation in full, and the same emphasis class for
+  the same reason — the kwarg numbering, where this file's high ordinals live, is bolded to a
+  word, so **every** real ordinal claim above `sixth` here was invisible to this sweep until the
+  class was added) — and note that this regex is
+  itself a tally that goes stale, since each new type can push an ordinal past the end of it.
+  `dumbbell` made `ninth` reachable, and the fix to the gauge family's own "the fifth and sixth"
+  — stale since the column kwargs passed six, and this sweep's own catch once it could see
+  bolded hits — made `eleventh` reachable; extend the alternation rather than assuming the sweep
+  still covers the top of the range. (This copy had also drifted a step behind `CLAUDE.md`'s, which already ran
+  to `tenth`: the sweep's own regex is prose about a count, and obeys the same rule as everything
+  else here.)
 - Render every visualization with Highcharts (`highcharts-core`); do not use
   native Streamlit charts.
 - Use `EnforcedNull` (from `highcharts_core.constants`) for missing data points
@@ -1888,6 +2521,15 @@ that it is **re-derived** when the aggregation changes.
   `{x, y, target, name}` forces the point DICT form, where a `None` target *vanishes* from the
   emitted JS instead of nulling while `EnforcedNull` still raises — no working spelling at all,
   which is why the branch emits a bare array and takes a single hue.)
+  `timeline` is the case where "no working spelling" governs a whole **policy** rather than one
+  slot, and it is worth reading beside the carve-out because the mechanism is the same and the
+  conclusion is opposite. An `EnforcedNull` in a timeline point's `name` raises inside
+  `Chart.from_options` — bullet's `target` layer exactly — while in its `x` highcharts-core removes
+  the key entirely and Highcharts back-fills a date the frame never held, which is worse than
+  raising: a mark that lies. So neither channel has a keep-the-slot form, and the type's
+  drop-the-row policy is the **library's** decision rather than this module's. Record that as
+  forced, not chosen: it is the one thing standing between the policy and a future edit that
+  "restores consistency" with the category-x family's kept slots.
 - A **row-less** frame (columns, no rows — a CSV with a header and no data) is a legitimate
   input and must draw an **empty chart, not raise**. Every `Series.map(...)` used as a mask
   must therefore be `.astype(bool)`-cast: `.map()` infers its result dtype from the values it
@@ -1900,19 +2542,28 @@ that it is **re-derived** when the aggregation changes.
   mask is `''`, so `int()` raises `ValueError`; and
   `&` between two of them raises out of the Arrow kernel, while `bool & str` merely *warns*
   today but is deprecated and will raise in pandas 4. The casts live at
-  `build_options`' `_label_ok` filter, on all three of `count_marks`' masks, and on
-  `_xrange_bars`' own `keep` mask. Sunburst is
-  the one type that needs no cast of its own: `_sunburst_tree` reads the frame with a plain
+  `build_options`' `_label_ok` filter, on all three of `count_marks`' masks, and on the two
+  whole-build helpers that re-apply `_label_ok` themselves — `_xrange_bars`' `keep` mask and
+  `_timeline_events`' — which is where a new type inherits the bug: a helper that reads the raw
+  frame for `count_marks` needs its own cast, not the shared filter's. Sunburst is the **first**
+  of the two types that need no cast of their own: `_sunburst_tree` reads the frame with a plain
   `zip` rather than a mask, so a row-less frame is simply an empty loop, and its `count_marks`
   branch returns *above* the three masks. It still rides the shared `_label_ok` filter, so it
   is covered by that cast like everything else. Xrange's `count_marks` branch likewise returns
   above the three masks, but `_xrange_bars` re-applies `_label_ok` *itself* — a mask, and so
   a cast — because it must produce byte-identical output from the raw frame `count_marks`
-  hands it and the filtered one `build_options` does. A row-less coordinate column is also the
+  hands it and the filtered one `build_options` does. Timeline's `_timeline_events` needs the cast
+  for a **stronger** reason: its `build_options` branch returns above the shared filter, so the
+  mask inside the helper is the only place `_label_ok` runs for that type at all, and an uncast one
+  would take the whole type down on a header-only CSV with nothing upstream to have caught it. A
+  row-less
+  coordinate column is also the
   one case `_coordinates` must NOT call a contradiction: nothing parses, but nothing is
-  *present* either, so it is missing data (an empty chart), not a column of the wrong kind.
-  Gauge needs no cast either, and for a third reason: it reads no mask at all (it reduces whole
-  columns), and its branch returns above the shared filter. But it is the one type whose empty
+  *present* either, so it is missing data (an empty chart), not a column of the wrong kind — which
+  is why a timeline draws an empty chart for a header-only CSV rather than reporting that its
+  date column is not dates.
+  Gauge is the second, and it gets there by a third reason: it reads no mask at all (it reduces
+  whole columns), and its branch returns above the shared filter. But it is the one type whose empty
   chart is **not zero marks** — its marks are the selected COLUMNS, not the rows, so a
   header-only CSV still selects one, and the ring is kept as a **null**. That is not a special
   case for the row-less frame: it is the ordinary no-data reading, arrived at with no rows rather
@@ -1936,7 +2587,11 @@ that it is **re-derived** when the aggregation changes.
   the row via
   `_spannable`, whose `_plottable`-on-both-ends half exists precisely for this: `end >= start`
   alone accepts `(-inf, 10)`, so the comparison is *not* enough on its own and the finiteness
-  check is what keeps a bare `inf` out of the emitted JS. **Bullet is the one type whose two value
+  check is what keeps a bare `inf` out of the emitted JS. Timeline drops the row through a bare
+  `_plottable` on its one coerced coordinate — belt rather than braces, since `_epoch_millis`
+  cannot manufacture an infinity out of a datetime column and `date_columns` admits nothing else,
+  but written the same way as every other branch so the day the sniff widens, the policy is
+  already there. **Bullet is the one type whose two value
   columns apply the policy INDEPENDENTLY**, and that is a policy rather than an oversight: a
   columnrange's pair are two ends of one mark, so `_range_point` nulls the whole slot
   all-or-nothing (a range with one end is not a range), while a bullet's are two **independent
@@ -1982,10 +2637,13 @@ that it is **re-derived** when the aggregation changes.
   label names nothing drawable, so its row is dropped uniformly via `_label_ok`, filtered
   once at the top of `build_options` (except scatter/bubble with a numeric x, where x is a
   coordinate `_plottable` already guards; sankey's second label column, `target_col`, is
-  checked in its own branch; and the **gauge family** (`solidgauge` and `gauge`), which has no
+  checked in its own branch; the **gauge family** (`solidgauge` and `gauge`), which has no
   label channel at all — both branches return *above* the filter, because a row filter over an
   AGGREGATE does not drop a mark, it
-  silently changes a NUMBER). This replaced an earlier split where most types kept a
+  silently changes a NUMBER; and **timeline**, which returns above it for a different reason —
+  it has a label channel and applies the identical predicate one layer down, inside
+  `_timeline_events`, so that the helper sees the same RAW column its picker sniffed. The policy
+  is unchanged there, only its address is). This replaced an earlier split where most types kept a
   `"nan"`/`"inf"` label and only sankey/boxplot dropped it. Two sweeps pin it:
   `test_no_supported_type_emits_a_non_finite_js_literal` for the value channel and
   `test_missing_or_non_finite_label_drops_the_row_in_every_type` for the label channel, so
@@ -1996,6 +2654,21 @@ that it is **re-derived** when the aggregation changes.
   a pin on a policy the family deliberately does not have. A vacuous pass is worse than no test.
   Reachable from a plain CSV: `inf`,
   `Infinity`, `-inf` and `1e400` (which silently overflows), and a blank cell (`nan`).
+- **Two string shapes reach the page UNQUOTED**, and both are worse than the `inf` above,
+  because an `inf` breaks *both* render modes (the export server answers `400`) while these
+  break only the interactive one: the chart call dies with a `SyntaxError`, the iframe is
+  blank, and the PNG comes back perfect. So they are invisible to every assertion over an
+  options dict, and both are pinned on `to_js_literal()` output instead. The first is a
+  **value shape**: a string that opens `{`, closes `}` and carries **at least as many colons as
+  brace-pairs** is written as a bare JS object, on any key and any axis — so `dataLabels.format`
+  and a series `pointFormat` are not exempt, whatever a key-shaped rule might suggest, and a
+  format that happens to open with markup, or to carry one colon fewer than it has brace-pairs,
+  is safe by accident rather than by kind. The second is a
+  **library bug**: any string beginning `Date` except exactly `"Date"` is emitted as raw
+  JavaScript, reachable from a chart title, a column name or a point's own label, and left
+  unworked-around on purpose — see
+  [`decisions.md`](decisions.md#the-strings-highcharts-core-emits-unquoted) for the
+  reproduction, the three channels and why every available fix was worse than the bug.
 - `build_chart_html` pins the chart's `color-scheme` to `only light`
   (`_LIGHT_COLOR_SCHEME_CSS`, on the `.highcharts-root` `<svg>`, not `html`: Highcharts
   declares `color-scheme: light dark` on the `.highcharts-container` div between them, and
@@ -2008,6 +2681,18 @@ that it is **re-derived** when the aggregation changes.
   makes the two render modes agree and leaves `_themed` the single source of truth for
   dark mode. Anything a new chart type wants themed must go through `build_options`,
   never through a Highcharts default.
+  The export server's own defaults fall under the same rule, and one of them was a
+  cross-type divergence until `0.20.0`: unless a `width` is passed it lays the chart
+  out at **600px**, and `st.image(..., width="stretch")` then stretches that layout to the
+  container, so the two modes drew genuinely different charts from one options dict.
+  Stretching cannot undo it, because what 600px changes is not scale but **layout**:
+  Highcharts lays text out at the width it is given and starts TRUNCATING labels
+  ("Incorporat"). Every type pays some of it; the types where a label IS the mark's
+  identity (a timeline's events, a sunburst's sectors) pay most. `streamlit_app.py` now
+  passes `CHART_PNG_WIDTH = 800` — the embed's realistic width in the left column of
+  `st.columns([3, 2])`, and 1600px at `scale=2` — rather than a round number chosen for
+  looks, and deliberately **not** as a sidebar slider, which would be a control that
+  changes only one of the two render modes.
 - Theme charts via `highcharts_builder.DEFAULT_COLORS` (applied by
   `build_options` to every chart, so the iframe and PNG paths are themed too). It **is**
   `.streamlit/config.toml`'s `chartCategoricalColors` — a categorical scale **designed for
@@ -2044,15 +2729,17 @@ that it is **re-derived** when the aggregation changes.
   single write. The one exception to the categorical palette is `heatmap`, which colors its
   cells by a sequential `colorAxis` (`_HEATMAP_GRADIENT`, its two endpoints drawn off the
   theme's own `chartSequentialColors`) rather than the categorical palette — it still carries `colors` for
-  cross-type consistency (the palette tests). The second, and the only place a **mark** flips
-  rather than chrome, is `bullet`'s goal crossbar: Highcharts draws it at 140% of the bar width,
-  so it necessarily crosses **both** the bar (a constant palette blue in both themes) *and* the
-  chart background (white → slate), and a fixed colour therefore cannot work **in principle** —
-  a near-black reads on the light shell and disappears on the dark one, a near-white does the
-  exact reverse (both rendered) — and against the current palette the two 3:1 ranges provably do
-  not overlap, so in dark mode the mark carries a **fill and a border**, one per surface. Where
+  cross-type consistency (the palette tests). The second is `bullet`'s goal crossbar, and note
+  where it is written: `_BULLET_TARGET_COLOR` / `_BULLET_TARGET_BORDER_COLOR` are **constants
+  emitted by `build_options`**, not a `_themed` hook — `_themed` names `bullet` only inside the
+  border-dissolve tuple, and the "the only place a mark flips rather than chrome" this passage
+  used to claim was a fossil of the two-mode world, corrected in `0.20.0`. What is true of the mark
+  is geometric: Highcharts draws the crossbar at 140% of the bar width, so it necessarily crosses
+  **both** the bar (a constant palette blue) *and* the chart background, and against the current
+  palette the two 3:1 ranges provably do not overlap — no single value can serve both, so the mark
+  carries a **fill and a border**, one per surface. Where
   every `borderColor` dissolve matches a mark **to** the
-  background, this hook matches one **against** it, and its light-mode value
-  (`_BULLET_TARGET_COLOR`) is `_DARK_CHROME["bg"]` read the other way round, so the pair the
-  crossbar swings between cannot drift from the pair the app shell uses
+  background, this pair reads **against** it, and both halves are the app shell's own
+  (`_DARK_CHROME["text"]` on `_DARK_CHROME["bg"]`), so neither can drift from the surface it is
+  measured against
   (`_NEEDLE_PIVOT_COLOR = _SUNBURST_ROOT_COLOR`'s aliasing rule — no new colors invented).

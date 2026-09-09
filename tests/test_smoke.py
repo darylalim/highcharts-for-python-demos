@@ -128,6 +128,7 @@ from highcharts_builder import (  # noqa: E402
     MAGNITUDE_RANGE_TYPES,
     NODE_LINK_TYPES,
     SUPPORTED_TYPES,
+    TIMELINE_TYPES,
     UNWEIGHTED_NODE_LINK_TYPES,
     VARIWIDE_TYPES,
     _gauge_reading_label,
@@ -164,6 +165,14 @@ def labeled_frame() -> pd.DataFrame:
     the columns it reads, so nothing is perturbed, but a new test that reaches for "the
     numeric column" must now say which. Its values sit strictly above "value"'s, so for
     xrange every row is spannable (``value`` is the START and ``end`` the END).
+
+    The fifth ("when") is for timeline alone, and it is the only extra that is not a
+    COMPANION column: timeline reads it as its Y, in place of "value" (see ``_y_for``), because
+    a timeline's Y says WHEN rather than how much. ISO-8601 STRINGS, not ``datetime64``, for
+    ``sample_data._release_plan``'s reason — that is what ``pd.read_csv`` hands back, so the
+    sweeps exercise the real ``_coordinates`` sniff rather than a pre-parsed dtype no CSV upload
+    produces. Object dtype, so it is inert for every other type exactly as "target"/"parent"
+    are: it cannot widen ``select_dtypes("number")`` the way "end" did.
     """
     return pd.DataFrame(
         {
@@ -172,6 +181,7 @@ def labeled_frame() -> pd.DataFrame:
             "parent": [None, "a", "a"],
             "value": [1.0, 2.0, 3.0],
             "end": [2.0, 4.0, 6.0],
+            "when": ["2026-01-05", "2026-02-23", "2026-03-09"],
         }
     )
 
@@ -285,6 +295,30 @@ def _after_for(chart_type: str) -> str | None:
     return "end" if chart_type in DUMBBELL_TYPES else None
 
 
+def _y_for(chart_type: str) -> list[str]:
+    """The ``y_cols`` those same sweeps pass: ``["when"]`` for timeline, ``["value"]`` for
+    everything else. The NINTH of the
+    ``_size_for``/``_target_for``/``_parent_for``/``_end_for``/``_high_for``/``_goal_for``/
+    ``_width_for``/``_after_for`` family, and the first that is not one of them in kind.
+
+    Every one of the eight above SUPPLIES A COMPANION COLUMN — a second channel the type needs
+    beside the shared ``y_cols=["value"]``, which they all leave untouched. This one varies the
+    Y ARGUMENT ITSELF, because timeline's Y is not a magnitude at all: it is a DATE, and
+    "value" would not merely draw a strange chart, it would raise ``_TIMELINE_NOT_A_DATE``
+    before any sweep's assertion could run. That distinction is the interesting thing about
+    this helper, and it is why it returns a LIST rather than a column name: it stands in the
+    positional ``y_cols`` slot the other eight never touch.
+
+    Note what it is NOT: an exemption. Timeline stays in every sweep — it builds, it
+    serializes, it carries the palette, it takes the dark background, it drops an undrawable
+    LABEL, it survives a row-less frame — which is the whole point of adapting the input rather
+    than dropping the type out (``_target_for``'s argument). The one sweep it rides VACUOUSLY
+    is the non-finite one, and that hole is plugged by a dedicated test rather than by an
+    exclusion — see ``test_timeline_every_point_keeps_a_real_date_where_the_sweep_sees_none``.
+    """
+    return ["when"] if chart_type in TIMELINE_TYPES else ["value"]
+
+
 # Radar remains the ONE "meta" type: Highcharts has no radar series, so it renders as a polar
 # *line* chart and its chart.type serializes as "line". Every other supported type's chart.type
 # equals its own name — and the gauge FAMILY is why that stayed true. `solidgauge` was never
@@ -310,7 +344,7 @@ def test_supported_type_builds(labeled_frame, chart_type):
         labeled_frame,
         chart_type,
         "label",
-        ["value"],
+        _y_for(chart_type),
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -343,7 +377,7 @@ def test_supported_type_builds_a_working_highcharts_core_chart(
         labeled_frame,
         chart_type,
         "label",
-        ["value"],
+        _y_for(chart_type),
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -354,6 +388,117 @@ def test_supported_type_builds_a_working_highcharts_core_chart(
         after_col=_after_for(chart_type),
     ).to_js_literal()
     assert js and f"type: '{_hc_type(chart_type)}'" in js
+
+
+# A `format:` whose value is an OBJECT rather than a quoted string. Highcharts-core writes a
+# format string through unchanged, so a `{...}` token that is not wrapped in quotes serializes
+# as a JS OBJECT LITERAL — `format: {value:%b %Y}` — which is not JavaScript at all.
+_UNQUOTED_FORMAT = re.compile(r"[A-Za-z]*[Ff]ormat:\s*\{")
+
+
+def test_a_string_beginning_with_date_is_emitted_unquoted_by_the_library():
+    """PINS A LIBRARY BUG this project deliberately did NOT work around.
+
+    ``highcharts_core/js_literal_functions.py`` serializes a bare string with::
+
+        if (item.startswith('[') or item.startswith('Date')) and item != 'Date':
+            as_str += f"...{item}..."      # emitted UNQUOTED
+
+    so ANY string beginning ``Date`` — except exactly ``"Date"`` — reaches the page as raw
+    JavaScript rather than as a string. It is the FOURTH serialization trap, and it lands in the
+    same place as the format one above: the chart call dies with a ``SyntaxError``, the iframe is
+    blank, and the export server renders the PNG PERFECTLY, so the two modes disagree and only
+    the interactive one is wrong.
+
+    It is reachable from three ordinary channels — the app's free-text chart title, a column name
+    (which becomes an axis title AND a series name), and a point's own label — and it is
+    PRE-EXISTING and type-agnostic. Timeline merely raised the odds, because its required column
+    is semantically a date and ``Date added`` / ``Dates`` / ``DateTime`` are all natural headers.
+
+    Not worked around, on purpose: every available fix mutates text the user typed (a zero-width
+    space defeats the prefix test and reaches the DOM and the PNG), which is a worse trade than a
+    documented library bug — see ``docs/decisions.md``. So this test does not assert the bug is
+    FIXED. It asserts the bug is STILL THERE, against the pinned highcharts-core, which is the
+    only way a repo that chose to live with something finds out when it changes: fixed upstream,
+    this test fails and the note in the decision record comes out. Widened upstream, it fails too.
+    """
+    df = pd.DataFrame({"label": ["a", "b"], "value": [1.0, 2.0]})
+
+    def js(frame: pd.DataFrame, y_col: str, **kwargs) -> str:
+        # `assert` rather than an inline ty suppression: `to_js_literal` is stubbed `str | None`,
+        # and this file's own idiom is to NARROW it by asserting the JS is non-empty — which every
+        # caller wants anyway. A suppression is for a stub mismatch there is no way to assert away.
+        # (Spelling the directive out here, even inside backticks, makes ty read it as a real one:
+        # it scans comment text, not code. Found by the gate, which is the gate working.)
+        out = make_chart(frame, "line", "label", [y_col], **kwargs).to_js_literal()
+        assert out
+        return out
+
+    # The trap, on the channel the app hands a user a free-text box for.
+    titled = js(df, "value", title="Dates that mattered")
+    assert "text: Dates that mattered" in titled
+    assert "'Dates that mattered'" not in titled
+    # ...and on a column name, which becomes both an axis title and a series name.
+    renamed = df.rename(columns={"value": "Date added"})
+    assert "name: Date added" in js(renamed, "Date added")
+
+    # CASE-SENSITIVE, and exactly "Date" is spared — the two facts that decide whether a column
+    # name is safe, and why `sample_data._company_milestones` spells its column lowercase.
+    assert "'date added'" in js(df, "value", title="date added")
+    assert "text: 'Date'" in js(df, "value", title="Date")
+    # An ordinary title is quoted, so the assertions above are about the PREFIX and not about
+    # titles in general.
+    assert "'Milestones'" in js(df, "value", title="Milestones")
+
+
+@pytest.mark.parametrize("chart_type", SUPPORTED_TYPES)
+def test_no_supported_type_emits_an_unquoted_format_object(labeled_frame, chart_type):
+    # THE THIRD SERIALIZATION TRAP, and the only one so far that is invisible in BOTH
+    # directions an options-dict test can look. `to_js_literal` renders a format string by
+    # substitution, so `{"format": "{value:%b %Y}"}` comes out as `format: {value:%b %Y}` — a
+    # bare brace-block where JS expects a string. The chart call dies with a SyntaxError, the
+    # iframe stays blank, and the export server renders the PNG PERFECTLY (it is handed the
+    # dict, never this text), so the two render modes disagree and only the interactive one is
+    # wrong. Verified by building a chart WITH `xAxis.labels.format` and reading the emitted JS.
+    #
+    # Swept over SUPPORTED_TYPES rather than pinned on the one type that provoked it, for the
+    # non-finite sweep's reason exactly: the trap is a property of the SERIALIZER, so it is
+    # available to every type and to every type not yet written. Timeline is simply where it was
+    # first reached — a datetime axis is the strongest possible invitation to write
+    # `labels.format`, and Highcharts' own date ticks are already right, so the answer there is
+    # to not reach for it.
+    #
+    # The rule is "no unquoted format OBJECT" rather than "no format key" because the trigger is
+    # the VALUE: a string that opens `{`, closes `}` and carries at least as many COLONS as
+    # brace-pairs is emitted bare, on ANY key. `{value:%b %Y}` and `{point.y:.1f}` (1 pair, 1
+    # colon) go bare; `{point.name}` and `{value}` (no colon) are quoted; and
+    # `{point.name}: {point.y}` — the label pie, funnel and pyramid all emit — is 2 pairs against
+    # 1 colon and is QUOTED, escaping by exactly one colon. Adding a precision to it
+    # (`{point.name}: {point.y:.1f}`) would blank all three. So the types using these keys today
+    # are not exempt, they merely pass: timeline's own tooltip survives only because it opens with
+    # `<b>` and so never looks like an object at all. A
+    # key-shaped rule would have cleared exactly the values that break.
+    js = make_chart(
+        labeled_frame,
+        chart_type,
+        "label",
+        _y_for(chart_type),
+        size_col=_size_for(chart_type),
+        target_col=_target_for(chart_type),
+        parent_col=_parent_for(chart_type),
+        end_col=_end_for(chart_type),
+        high_col=_high_for(chart_type),
+        goal_col=_goal_for(chart_type),
+        width_col=_width_for(chart_type),
+        after_col=_after_for(chart_type),
+    ).to_js_literal()
+    assert js
+    found = _UNQUOTED_FORMAT.search(js)
+    context = "" if found is None else js[max(0, found.start() - 40) : found.end() + 40]
+    assert found is None, (
+        f"{chart_type} emitted an unquoted format object — invalid JS, so the iframe renders "
+        f"blank while the export server's PNG comes back perfect: ...{context}..."
+    )
 
 
 @pytest.fixture
@@ -372,7 +517,17 @@ def non_finite_frame() -> pd.DataFrame:
     their rows while "c" (9 -> 10) survives and draws. "end" is kept FINITE here on purpose:
     it is the one channel this fixture cannot reach, since an infinite end would drop the only
     surviving row and leave an empty chart that passes the sweep trivially. It is covered
-    directly instead — see ``test_xrange_drops_a_non_finite_start_or_end``."""
+    directly instead — see ``test_xrange_drops_a_non_finite_start_or_end``.
+
+    "when" — timeline's Y (see ``_y_for``) — is kept a VALID date column, and that is the same
+    decision as "end"'s above, reached at a different layer. An infinity does not survive
+    ``_coordinates`` at all: in an ISO-date column it coerces to ``NaN`` and drops its row, so
+    an "infected" date column would leave this sweep asserting nothing about timeline that a
+    clean one does not. Worse, a NUMERIC infinity there would flip the column's kind to
+    ``_COORD_NUMBER`` and make ``build_options`` RAISE — the sweep would fail on a refusal that
+    has nothing to do with a non-finite literal. So timeline's non-finite story is told where it
+    can actually be seen, on the emitted point's ``x`` key:
+    ``test_timeline_every_point_keeps_a_real_date_where_the_sweep_sees_none``."""
     return pd.DataFrame(
         {
             "label": ["a", "b", "c"],
@@ -380,6 +535,7 @@ def non_finite_frame() -> pd.DataFrame:
             "parent": [None, "a", "a"],
             "value": [float("inf"), float("-inf"), 9.0],
             "end": [2.0, 4.0, 10.0],
+            "when": ["2026-01-05", "2026-02-23", "2026-03-09"],
         }
     )
 
@@ -405,7 +561,7 @@ def test_no_supported_type_emits_a_non_finite_js_literal(non_finite_frame, chart
         non_finite_frame,
         chart_type,
         "label",
-        ["value"],
+        _y_for(chart_type),
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -457,6 +613,13 @@ def test_missing_or_non_finite_label_drops_the_row_in_every_type(chart_type):
             # xrange's second coordinate column, above "value" so every row is spannable —
             # leaving the LABEL the only reason a row can drop, which is what this sweep tests.
             "end": [2.0, 4.0, 6.0],
+            # timeline's Y (see `_y_for`): every cell a real date, for the same reason "end" is
+            # spannable on every row — the LABEL must be the only thing that can drop a row.
+            # `_timeline_events` sniffs the kind over the WHOLE column (never the `_label_ok`
+            # survivors — that was the picker-promise bug, see
+            # `test_timeline_never_refuses_a_column_its_own_picker_offered`), so every cell being
+            # a real date is what keeps the column a date column however many labels drop.
+            "when": ["2026-01-05", "2026-02-23", "2026-03-09"],
         }
     )
     inf_df = pd.DataFrame(
@@ -470,6 +633,7 @@ def test_missing_or_non_finite_label_drops_the_row_in_every_type(chart_type):
             "parent": [float("nan"), 1.0, 1.0],
             "value": [1.0, 2.0, 3.0],
             "end": [2.0, 4.0, 6.0],
+            "when": ["2026-01-05", "2026-02-23", "2026-03-09"],
         }
     )
     for df, token in ((nan_df, "nan"), (inf_df, "inf")):
@@ -477,7 +641,7 @@ def test_missing_or_non_finite_label_drops_the_row_in_every_type(chart_type):
             df,
             chart_type,
             "label",
-            ["value"],
+            _y_for(chart_type),
             size_col=_size_for(chart_type),
             target_col="to" if chart_type in NODE_LINK_TYPES else None,
             parent_col="parent" if chart_type == "sunburst" else None,
@@ -522,13 +686,18 @@ def test_row_less_frame_draws_an_empty_chart_in_every_type(chart_type):
             # must NOT call a contradiction: nothing parses, but nothing is PRESENT either, so
             # it is missing data (an empty chart), not a column of the wrong kind (a raise).
             "end": pd.Series([], dtype=float),
+            # timeline's Y (see `_y_for`). Row-less, it reaches `_coordinates` as `_COORD_EMPTY`
+            # — the ABSTENTION, not a kind — which is precisely what keeps a header-only CSV out
+            # of `_TIMELINE_NOT_A_DATE`. Object dtype, the dtype `read_csv` gives an unfilled
+            # date column, so the case this sweep reaches is the one a real upload produces.
+            "when": pd.Series([], dtype=object),
         }
     )
     opts = build_options(
         empty,
         chart_type,
         "label",
-        ["value"],
+        _y_for(chart_type),
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -551,7 +720,7 @@ def test_row_less_frame_draws_an_empty_chart_in_every_type(chart_type):
         empty,
         chart_type,
         "label",
-        ["value"],
+        _y_for(chart_type),
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -822,7 +991,7 @@ def test_default_title_per_type(labeled_frame, chart_type):
         labeled_frame,
         chart_type,
         "label",
-        ["value"],
+        _y_for(chart_type),
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -847,7 +1016,7 @@ def test_default_palette_applied_per_type(labeled_frame, chart_type):
         labeled_frame,
         chart_type,
         "label",
-        ["value"],
+        _y_for(chart_type),
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -883,7 +1052,7 @@ def test_dark_mode_sets_chart_background(labeled_frame, chart_type):
         labeled_frame,
         chart_type,
         "label",
-        ["value"],
+        _y_for(chart_type),
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -902,7 +1071,7 @@ def test_dark_mode_keeps_the_shared_palette(labeled_frame, chart_type):
         labeled_frame,
         chart_type,
         "label",
-        ["value"],
+        _y_for(chart_type),
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -964,7 +1133,7 @@ def test_dark_mode_themes_the_tooltip(labeled_frame, chart_type):
         labeled_frame,
         chart_type,
         "label",
-        ["value"],
+        _y_for(chart_type),
         size_col=_size_for(chart_type),
         target_col=_target_for(chart_type),
         parent_col=_parent_for(chart_type),
@@ -3703,7 +3872,11 @@ def test_waterfall_dark_mode_themes_the_bars_and_the_connectors():
     # as pie/treemap/sankey dissolve their gaps. The CONNECTOR lines — what make a waterfall
     # read as a running total rather than a row of floating bars — survive on the dark
     # background only barely, so they are lifted to the axis color. That half is waterfall's
-    # alone: it is the only line Highcharts draws BETWEEN marks.
+    # alone, on a scoping that is load-bearing: it is the only line in this module drawn between
+    # two SEPARATE marks. A dumbbell's connector joins the two ends of ONE point (there the
+    # connector IS the mark, already drawn in the series hue), a timeline's spine is the line its
+    # marks sit ON, and a cartesian series line is the series itself — none of them is a distinct
+    # element with its own `lineColor` running from one mark to the next.
     opts = build_options(_bridge(), "waterfall", "step", ["delta"])
     wf = opts["plotOptions"]["waterfall"]
     assert wf["borderColor"] == "#0f172a"  # == _DARK_CHROME["bg"]
@@ -5992,18 +6165,23 @@ def test_bullet_sets_a_crossbar_colour_off_the_categorical_palette():
     assert set(target) == {"color", "borderColor", "borderWidth"}
 
 
-def test_bullet_themes_both_hooks_and_the_crossbar_reads_on_both_its_surfaces():
-    """Bullet's two `_themed` hooks, of DIFFERENT KINDS, pinned together because a fix to either
-    that broke the other would otherwise pass half the suite.
+def test_bullet_dissolves_its_border_and_its_crossbar_reads_on_both_its_surfaces():
+    """Bullet's ONE `_themed` hook, plus the crossbar constants `build_options` writes, pinned
+    together because a fix to either that broke the other would otherwise pass half the suite.
 
     `borderColor` is the ordinary dissolve, shared with column/bar/xrange/columnrange and NOT
     waterfall — joined on a MEASUREMENT rather than an inference, since waterfall is the standing
     proof the shared bar base class settles nothing (its border is a fixed #333333, while bullet's
-    bars come back crisply ringed white). `targetOptions` is the only hook in this module that
-    styles a MARK rather than chrome: the crossbar is drawn at 140% of the bar width, so it
-    necessarily spans TWO surfaces at once — the bar and the chart background — and a single
-    colour therefore cannot work in PRINCIPLE, not merely in practice. Which is why it is the one
-    mark carrying a fill AND a border: one value per surface.
+    bars come back crisply ringed white). That is the whole of bullet's presence in `_themed`.
+
+    `targetOptions` is NOT a second hook, and the distinction is the point rather than pedantry:
+    its colours are FIXED CONSTANTS written in `build_options`, and `_themed` never touches them.
+    (This test was called `..._themes_both_hooks_...` and said so in prose until a docs audit
+    checked it against `_themed`, where `"bullet"` appears only inside the border-dissolve tuple.
+    The assertions below were right the whole time; the name and the story were a fossil of the
+    two-mode world 0.18.0 removed.) What makes the crossbar need two values is geometry, not
+    theming: drawn at 140% of the bar width it spans the bar AND the chart background, and no
+    single colour clears both — so it carries a fill and a border, one per surface.
 
     The hue is asserted at its PATH in the option tree and in the serialized JS at the level it
     was written to, never as a bare `"#f1f5f9" in js`: that string is `_DARK_CHROME["text"]`,
@@ -6450,10 +6628,11 @@ def test_variwide_tooltip_reads_the_category_and_both_channels():
     so this reads the right one (waterfall's fix, columnrange's and bullet's reason), and
     `{point.name}` is blank here anyway (positional arrays).
 
-    `{point.z}` is the one number in this module a tooltip is the ONLY home for. Everywhere else
-    "prints nothing in the mark" rests on xrange's premise — the value lands on a ticked axis —
-    and that premise is FALSE for a width: the x axis carries variable-width category slots, not a
-    scale. It resolves despite the literal key never appearing in the JS (the same positional
+    `{point.z}` is a number a tooltip is the ONLY home for — shared with `bubble`'s `size_col`,
+    the same token on the same key, and bubble predates this type by many releases; what differs
+    is the MARK (a bar's width against a marker's area), not the channel. Everywhere else "prints
+    nothing in the mark" rests on xrange's premise — the value lands on a ticked axis — and that
+    premise is FALSE for a width: the x axis carries variable-width category slots, not a scale. It resolves despite the literal key never appearing in the JS (the same positional
     survival `{point.target}` relies on).
     """
     fmt = _variwide_opts()["tooltip"]["pointFormat"]
@@ -7038,6 +7217,544 @@ def test_dumbbell_sample_builds():
     # column, so before/after must be the first two.
     numeric = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     assert numeric[:2] == ["q1_share_pct", "q4_share_pct"]
+
+
+# --------------------------------------------------------------------------- #
+# Timeline — dated EVENTS, one instant per row on one shared spine
+#
+# The SUPPORTED_TYPES sweeps already cover, via `_y_for`: that it builds, serializes through the
+# real Chart.from_options -> to_js_literal pipeline, carries DEFAULT_COLORS, takes the dark
+# background and the themed tooltip, drops a row whose LABEL is missing or non-finite, survives a
+# row-less frame, and emits no unquoted format object. What follows is only what is timeline's
+# own — plus the ONE sweep it rides vacuously, plugged here rather than by an exclusion.
+# --------------------------------------------------------------------------- #
+def _timeline_df() -> pd.DataFrame:
+    """Three named events with ISO-8601 date STRINGS — the dtype `read_csv` actually produces.
+
+    Written as strings rather than `datetime64` on purpose, `sample_data._company_milestones`'
+    reason: an object column that has to be SNIFFED is the only shape that exercises
+    `_coordinates`, and it is the only shape a CSV upload can deliver. A pre-parsed frame would
+    skip the branch every one of this type's guards hangs off.
+    """
+    return pd.DataFrame(
+        {
+            "milestone": ["Incorporated", "Seed round", "Public launch"],
+            "date": ["2026-01-12", "2026-02-23", "2026-06-29"],
+        }
+    )
+
+
+def _timeline_opts(df: pd.DataFrame | None = None, **kwargs) -> dict:
+    return build_options(
+        df if df is not None else _timeline_df(),
+        "timeline",
+        "milestone",
+        ["date"],
+        **kwargs,
+    )
+
+
+def _timeline_points(opts: dict) -> list:
+    return opts["series"][0]["data"]
+
+
+def _timeline_js(df: pd.DataFrame | None = None, **kwargs) -> str:
+    js = make_chart(
+        df if df is not None else _timeline_df(),
+        "timeline",
+        "milestone",
+        ["date"],
+        **kwargs,
+    ).to_js_literal()
+    assert js
+    return js
+
+
+def _timeline_data_block(js: str) -> str:
+    """The series' ``data: [ ... ]`` array, sliced out of the emitted JS as raw text.
+
+    Bracket-counted rather than regex-matched, because the array holds nested point objects and
+    a non-greedy `\\[.*?\\]` would stop at the first `]` it met. It counts brackets WITHOUT
+    tracking string literals, which is fine here and only here: the frames in this section carry
+    event names with no brackets in them. Anything read out of this block is a claim about the
+    JS a browser is handed — the only layer at which the two traps below are visible at all.
+    """
+    open_at = js.index("data: [") + len("data: [")
+    depth, i = 1, open_at
+    while depth:
+        depth += {"[": 1, "]": -1}.get(js[i], 0)
+        i += 1
+    return js[open_at : i - 1]
+
+
+def test_timeline_every_point_keeps_a_real_date_where_the_sweep_sees_none():
+    """THE VACUOUS-SWEEP PLUG: the non-finite sweep cannot see timeline's value channel.
+
+    An `inf` in an ISO-date column never reaches `_plottable` as an infinity. `_coordinates`
+    coerces the column with `to_datetime(..., errors="coerce")`, the infinity becomes `NaT` and
+    then `NaN`, and the MAJORITY of real dates keeps the column's kind `_COORD_DATE` — so the
+    row drops as ordinary missing data and no `inf` token can reach the JS. Verified before this
+    test was written, and asserted below: `test_no_supported_type_emits_a_non_finite_js_literal`
+    passes on this very frame.
+
+    That makes the sweep's assertion true and empty for this type, and the emptiness is not
+    fixable by "infecting" the fixture harder: a NUMERIC infinity in the date column flips the
+    kind to `_COORD_NUMBER` and `build_options` RAISES `_TIMELINE_NOT_A_DATE` — the sweep would
+    then fail on a refusal that has nothing to do with a non-finite literal.
+
+    So the missing-data policy is pinned where it IS visible: on the emitted point's `x` key.
+    The failure the drop guard prevents is not a bad token, it is a bad MARK — highcharts-core
+    serializes a `NaN` x as `x: null`, and Highcharts then back-fills a date the frame never
+    held, drawing an event that lies about when it happened rather than one that is absent.
+    """
+    df = pd.DataFrame(
+        {
+            "milestone": ["Incorporated", "Seed round", "Public launch"],
+            "date": ["2026-01-12", float("inf"), "2026-06-29"],
+        }
+    )
+    js = _timeline_js(df)
+    # 1. The sweep's own predicate, run here to show it is satisfied: no non-finite TOKEN
+    #    survives, with the drop guard in place OR deleted. This is the vacuity, asserted.
+    for token in ("inf", "nan", "NaN"):
+        assert token not in js, f"timeline emitted a non-finite literal: {token}"
+    assert (
+        "type: 'datetime'" in js
+    )  # ...and the column still read as DATES, not numbers
+    # 2. What the sweep cannot see. Two rows carried a date, so the JS must hold exactly two
+    #    points — each with an `x`, and none of them the back-filling `x: null`.
+    data = _timeline_data_block(js)
+    assert data.count("name:") == 2, "a dateless event was drawn anyway"
+    assert data.count("x:") == 2, "a point reached the chart without a date"
+    assert "x: null" not in data, "a nulled x lets Highcharts invent the date"
+    assert len(_timeline_points(_timeline_opts(df))) == 2  # and the options dict agrees
+
+
+def test_timeline_an_empty_date_column_is_missing_data_not_a_refusal():
+    """`_COORD_EMPTY` ABSTAINS: an unfilled date column draws an empty chart, never a raise.
+
+    This is xrange's own reviewed bug re-asked one type over, and the answer has to be the same
+    one. A header-only CSV, and a Gantt-shaped sheet whose dates nobody has filled in yet, are
+    both straight out of `read_csv` — missing data with a right answer (drop every row) rather
+    than a column of the wrong kind (report a contradiction). An empty column makes no claim
+    about an axis, so it cannot lose an argument about one.
+
+    Pinned at BOTH ends, because the exemption is spelled twice and either spelling alone would
+    leave the other half enforcing the tightened rule: `date_columns` must still OFFER such a
+    column (or the app's picker hides it and the page has no Date to select), and
+    `_timeline_events` must still ACCEPT it (or the builder raises on what the picker offered).
+    """
+    from highcharts_builder import date_columns
+
+    header_only = pd.DataFrame(
+        {
+            "milestone": pd.Series([], dtype=object),
+            "date": pd.Series([], dtype=object),
+        }
+    )
+    assert (
+        _timeline_points(_timeline_opts(header_only)) == []
+    )  # empty chart, not a raise
+    assert count_marks(header_only, "timeline", "milestone", ["date"]) == 0
+    assert "type: 'timeline'" in _timeline_js(header_only)  # ...and it still serializes
+    assert "date" in date_columns(
+        header_only
+    )  # ...and the picker still offers the column
+
+    # The populated half: real event names, every date cell blank. Nothing drops the ROWS but
+    # the dates, so this reaches the same abstention by the other route.
+    unfilled = pd.DataFrame(
+        {
+            "milestone": ["Incorporated", "Seed round"],
+            "date": [None, float("nan")],
+        }
+    )
+    assert _timeline_points(_timeline_opts(unfilled)) == []
+    assert count_marks(unfilled, "timeline", "milestone", ["date"]) == 0
+    assert date_columns(unfilled) == [
+        "date"
+    ]  # offered; "milestone" is not a coordinate
+
+
+def test_timeline_never_refuses_a_column_its_own_picker_offered():
+    """THE INVARIANT THE PICKER'S PROMISE RESTS ON — and the regression guard for a real bug.
+
+    `date_columns` sources the app's Date picker, so this type's whole guard story — that
+    `_TIMELINE_NOT_A_DATE` is UNREACHABLE from the UI, which is why it ships with no `explain_*`
+    twin and no app-side warning where xrange needs both — reduces to one claim: `date_columns`
+    and `_timeline_events` never disagree about whether a column is dates.
+
+    They DID, and the suite was green. `_timeline_events` sniffed the column over the `_label_ok`
+    SURVIVORS (`_xrange_bars`' rule, which is right for xrange and wrong here), while
+    `date_columns` sniffs it whole. A frame whose NAMED rows are disproportionately non-dates
+    flips the majority vote between the two, so the picker offered a column `build_options` then
+    raised on — a Streamlit traceback in place of the page, from a plain CSV upload, with no
+    other column available to pick. Found by review; no test could see it, because every test
+    used a frame on which the two row sets agreed.
+
+    The fix makes the kind independent of `x_col` altogether: both functions read only
+    `df[date_col]`, so no label column can move the answer. That is what this pins.
+    """
+    from highcharts_builder import date_columns
+
+    # The exact shape that broke it, in both flavours the flip comes in. Whole column: 2 dates
+    # against 1 non-date -> DATE. Survivors: the only NAMED row is the non-date -> NEITHER/NUMBER.
+    for provoking_cell in ("TBD", "9"):
+        flipped = pd.DataFrame(
+            {
+                "milestone": [float("nan"), float("nan"), "Public launch"],
+                "date": ["2026-01-12", "2026-02-23", provoking_cell],
+            }
+        )
+        assert date_columns(flipped) == ["date"]  # the picker offers it...
+        opts = _timeline_opts(flipped)  # ...so the builder must not refuse it
+        # And the provoking row is not swept up to buy that: the column IS dates and this row's
+        # date is missing, so it drops through the ordinary missing-data policy.
+        assert _timeline_points(opts) == []
+        assert count_marks(flipped, "timeline", "milestone", ["date"]) == 0
+
+    # The KPI still counts exactly what the chart draws, on a frame that DOES draw — the half the
+    # whole-build reuse exists for, which the fix must not have cost.
+    mixed = pd.DataFrame(
+        {
+            "milestone": ["Kickoff", float("nan"), "GA"],
+            "date": ["2026-01-05", "2026-02-01", "TBD"],
+        }
+    )
+    drawn = _timeline_points(_timeline_opts(mixed))
+    assert count_marks(mixed, "timeline", "milestone", ["date"]) == len(drawn) == 1
+    assert drawn[0]["name"] == "Kickoff"
+
+    # A column the picker does NOT offer is still refused — the guard is narrowed, not removed.
+    numeric = pd.DataFrame({"milestone": ["a", "b"], "date": [3.0, 4.0]})
+    assert date_columns(numeric) == []
+    with pytest.raises(ValueError, match="doesn't read as dates"):
+        _timeline_opts(numeric)
+
+
+def test_timeline_themes_the_spine_the_marker_ring_and_the_label_card():
+    """The `_themed` hook, asserted BY PATH — never as a hex substring in the JS.
+
+    Every value this hook writes is also written elsewhere on every dark chart (`bg` to the
+    chart background, `axis` to both axes' lines, `text` to the title), so a `"#475569" in js`
+    assertion passes with the hook deleted outright. That is this file's standing dark-mode
+    hole, and it is worse here than anywhere else: timeline is deliberately NOT in `_themed`'s
+    six-member bar tuple, because `plotOptions.timeline.borderColor` is one of the keys
+    highcharts-core silently DROPS for this type (verified on the round trip — set it and it
+    does not appear in the emitted JS). So the "consistency" edit that adds `"timeline"` to that
+    tuple and deletes this branch produces a chart with NO theme hook at all, whose emitted JS
+    still contains every hex a substring test would look for.
+
+    The three writes are the three surfaces measured off rendered PNGs: the SPINE (via the
+    series colour — see the precondition test below), the 2px marker RING (the background var
+    the `color-scheme` pin holds white, column/bar's case), and the dataLabel CARD (pie's and
+    funnel's case, labels on the chart background rather than on a fill).
+    """
+    from highcharts_builder import _DARK_CHROME
+
+    timeline = _timeline_opts()["plotOptions"]["timeline"]
+    # `.get`, not `[...]`: with the branch deleted these keys are ABSENT, and a bare KeyError
+    # reports the lookup rather than the fact. The failure should name the surface that went
+    # untouched, since that is what the reader has to go and look at.
+    assert timeline.get("color") == _DARK_CHROME["axis"], "the spine is unthemed"
+    marker = timeline.get("marker", {})
+    assert marker.get("lineColor") == _DARK_CHROME["bg"], "the marker ring is unthemed"
+    labels = timeline.get("dataLabels", {})
+    assert labels.get("backgroundColor") == _DARK_CHROME["bg"], (
+        "the label card is unthemed"
+    )
+    assert labels.get("borderColor") == _DARK_CHROME["axis"]
+    assert labels.get("color") == _DARK_CHROME["text"]
+    # The dataLabels write is COLOURS ONLY: a `format` here would replace Highcharts' own
+    # formatter and cost both the colour bullet and the bold name (see the build branch).
+    assert "format" not in labels
+    # And the hook is not merely present in the dict — it SURVIVES to the JS. This module has
+    # been bitten three times by an option that validates and is then silently dropped, and
+    # `borderColor` at THIS level is one of them, which is why the tuple entry would be a hook
+    # that looks right and sets nothing.
+    js = _timeline_js()
+    plot_options = js[js.index("plotOptions") : js.index("series:")]
+    assert f"color: '{_DARK_CHROME['axis']}'" in plot_options
+    assert f"lineColor: '{_DARK_CHROME['bg']}'" in plot_options
+    # The trap itself, stated as an assertion so it cannot quietly stop being true: the hex the
+    # substring form would look for is in the JS no matter what this hook does.
+    assert _DARK_CHROME["bg"] in js and _DARK_CHROME["axis"] in js
+
+
+def test_timeline_seeds_every_point_and_turns_color_by_point_off():
+    """THE CROSS-LAYER PRECONDITION — the other half of the `_themed` hook above.
+
+    The spine is reachable only through the SERIES `color` (`lineColor` is dropped for this type
+    at both the plotOptions and the series level), and a series `color` reaches the spine only
+    while `colorByPoint` is OFF. Turning it off paints every marker one hue unless each point
+    already carries its own — so the two facts below are not about colour identity at all, they
+    are jointly what makes the spine themable.
+
+    THREE writes hold it up (those two plus `_themed`'s `color`) and each fails DIFFERENTLY, which
+    an earlier version of this docstring got wrong by saying either reverts the spine to #cccccc.
+    Only dropping `colorByPoint: False` does that. Dropping `_themed`'s `color` leaves the series
+    on `colors[0]`, so the spine comes out palette BLUE — themed-looking and wrong, and precisely
+    the failure a hex-substring test cannot see. Dropping the seeding leaves the spine slate and
+    flattens every marker to one hue.
+
+    This is the module's first theme hook with a precondition in `build_options`, so it is also
+    the first that CANNOT be pinned from one layer. Edit one, run all three mutations.
+    """
+    opts = _timeline_opts()
+    assert opts["plotOptions"]["timeline"]["colorByPoint"] is False
+    assert [p["color"] for p in _timeline_points(opts)] == list(DEFAULT_COLORS[:3])
+    # A short custom palette must CYCLE rather than IndexError (the `_BOXPLOT_OUTLIER_COLOR`
+    # concern) — sunburst's and xrange's seeding, verbatim.
+    cycled = _timeline_opts(colors=["#111111", "#222222"])
+    assert [p["color"] for p in _timeline_points(cycled)] == [
+        "#111111",
+        "#222222",
+        "#111111",
+    ]
+    # Both halves reach the JS: `colorByPoint: false` is spelled (it INVERTS this type's
+    # Highcharts default, so it must never be left to be inherited) and the seeds survive.
+    js = _timeline_js()
+    assert "colorByPoint: false" in js
+    assert f"color: '{DEFAULT_COLORS[0]}'" in _timeline_data_block(js)
+
+
+def test_timeline_draws_its_events_in_date_order_whatever_the_row_order():
+    """The one place this type departs from the module's habit of drawing rows where the frame
+    put them — and the departure is not cosmetic.
+
+    Unsorted, three things break and only the first is visible from Python: Highcharts logs
+    warning #15 on every render; the palette stops progressing, because `build_options` seeds the
+    hues by LIST POSITION and a colour sequence running along a time axis reads as meaning
+    something; and the dataLabel stagger breaks, because Highcharts alternates above/below the
+    spine by POINT INDEX, so out-of-order rows put consecutive marks on the same side and their
+    labels overlap. The last is the type's readability rather than a nicety — a timeline's label
+    IS its mark's whole identity.
+
+    All three were found by RENDERING an unsorted frame, none of them by a test, which is why the
+    order is pinned here now that it is known.
+
+    Sorting is safe in a way it would not be for a category-axis type: an instant's position is
+    its own coordinate rather than its index, so this reorders the DRAWING and never the READING.
+    """
+    shuffled = pd.DataFrame(
+        {
+            "milestone": ["Public launch", "Incorporated", "Seed round"],
+            "date": ["2026-06-29", "2026-01-12", "2026-02-23"],
+        }
+    )
+    points = _timeline_points(_timeline_opts(shuffled))
+    assert [p["name"] for p in points] == [
+        "Incorporated",
+        "Seed round",
+        "Public launch",
+    ]
+    assert [p["x"] for p in points] == sorted(p["x"] for p in points)
+    # The sort runs BEFORE the hue seeding, and that order is the half a "just sort it" edit
+    # would miss: seeding first and sorting second fixes the warning while carrying the
+    # scrambled palette along with the points.
+    assert [p["color"] for p in points] == list(DEFAULT_COLORS[:3])
+    # STABLE, so two events on one date keep their ROW order — the frame's own answer to a
+    # question the dates cannot settle.
+    tie = pd.DataFrame({"milestone": ["A", "B"], "date": ["2026-03-09", "2026-03-09"]})
+    assert [p["name"] for p in _timeline_points(_timeline_opts(tie))] == ["A", "B"]
+    # Reordering is not dropping: the KPI counts exactly what it counted before.
+    assert count_marks(shuffled, "timeline", "milestone", ["date"]) == 3
+
+
+def test_timeline_pulls_in_its_own_module():
+    """Every module-requiring type pins its script tag, and timeline shipped without one.
+
+    Nothing else can see this: `build_options` validates, `to_js_literal` serializes, and the
+    export server renders the PNG PERFECTLY — it is handed the options, never these tags. Only
+    the iframe fails, with Highcharts error #17 ("requested series type does not exist") on a
+    blank page. That is the interactive-only divergence this file pins for heatmap, treemap,
+    funnel, sankey, dependencywheel, networkgraph, organization, sunburst, xrange, bullet,
+    variwide, dumbbell and solidgauge, and timeline was the one module type without it. (The
+    gauge family is the near-miss: it pins `highcharts-more` through `get_required_modules()`
+    rather than through the emitted tags, so it is covered by a different instrument.)
+
+    `modules/timeline.js` resolves from `chart.type` alone and needs no prerequisite, so unlike
+    dependencywheel's and organization's it takes no `_MODULE_LOAD_ORDER` entry — which is worth
+    pinning too, since a highcharts-core upgrade that gave it one would reorder silently.
+    """
+    tags = make_chart(
+        _timeline_df(), "timeline", "milestone", ["date"]
+    ).get_script_tags(as_str=True)
+    assert "modules/timeline.js" in tags
+    # The prerequisite it does NOT have. `highcharts-more` is the plausible guess (bubble, radar,
+    # boxplot, dumbbell and the gauges all need it) and the round-trip refutes it.
+    assert "highcharts-more" not in tags
+    assert tags.index("highcharts.js") < tags.index("modules/timeline.js")
+
+
+def test_timeline_tooltip_keeps_the_time_when_the_data_carries_one():
+    """The tooltip is the ONLY place a timeline states the instant — the ticks are months and the
+    marks are points — so its precision has to follow the data.
+
+    `date_columns` accepts an ISO-8601 column with a clock time in it, and both marks are then
+    placed correctly at distinct coordinates. With a fixed `%Y-%m-%d` they also printed the SAME
+    tooltip: a deploy that started at 09:30 and ended at 17:45 became two correctly-placed,
+    indistinguishable readings in the one channel meant to tell them apart. Found by review; every
+    frame this type had been rendered with had day granularity.
+
+    Widening it unconditionally is the wrong trade the other way, so the day form is pinned too.
+    """
+    day = _timeline_opts()
+    assert (
+        day["plotOptions"]["timeline"]["tooltip"]["pointFormat"]
+        == "<b>{point.name}</b><br/>{point.x:%Y-%m-%d}"
+    )
+    instants = pd.DataFrame(
+        {
+            "milestone": ["deploy start", "deploy end"],
+            "date": ["2026-01-12T09:30:00Z", "2026-01-12T17:45:00Z"],
+        }
+    )
+    sub_day = _timeline_opts(instants)
+    assert (
+        sub_day["plotOptions"]["timeline"]["tooltip"]["pointFormat"]
+        == "<b>{point.name}</b><br/>{point.x:%Y-%m-%d %H:%M}"
+    )
+    # The two marks really are distinct — the tooltip is fixing a READING problem, not covering
+    # for a placement one.
+    assert len({p["x"] for p in _timeline_points(sub_day)}) == 2
+    # And the widened format still opens with `<b>`, so it stays out of the unquoted-object trap
+    # the sweep above guards (a value that opened `{` and carried a colon would serialize bare).
+    js = _timeline_js(instants)
+    assert "pointFormat: '<b>" in js
+
+
+def test_picker_columns_answers_both_pickers_from_one_sniff():
+    """The two picker sources are one membership test apart, and `picker_columns` is what makes
+    that structural instead of two comprehensions agreeing.
+
+    Both were separate `df.columns` loops calling `_coordinates`, which runs a `to_datetime` AND
+    a `to_numeric` coercion per object column — so the app paid the sidebar's most expensive
+    operation twice on every rerun, for every chart type, including the ones that use neither list.
+
+    The SUBSET relation is the half worth pinning: every date column is a coordinate column, by
+    construction rather than by agreement, because `_DATE_KINDS` is a literal subset of
+    `_COORDINATE_KINDS`.
+    """
+    from highcharts_builder import coordinate_columns, date_columns, picker_columns
+
+    df = pd.DataFrame(
+        {
+            "name": ["a", "b"],  # neither
+            "count": [1, 2],  # a number: a coordinate, not a date
+            "when": ["2026-01-05", "2026-02-01"],  # a date: both
+            "blank": [None, None],  # empty: no claim, so compatible with both
+        }
+    )
+    coord_cols, date_cols = picker_columns(df)
+    assert coord_cols == ["count", "when", "blank"]
+    assert date_cols == ["when", "blank"]
+    assert set(date_cols) <= set(coord_cols)
+    # The two public wrappers are the same answer, so a caller that wants only one is not paying
+    # for a different rule.
+    assert coordinate_columns(df) == coord_cols
+    assert date_columns(df) == date_cols
+    # A row-less frame keeps every column: `_COORD_EMPTY` is in both kind tuples, which is what
+    # lets a header-only CSV reach a picker at all.
+    assert picker_columns(df.iloc[0:0]) == (list(df.columns), list(df.columns))
+
+
+def test_timeline_allows_x_in_y():
+    """Pins an ABSENCE: there is deliberately no collision guard, arearange's precedent.
+
+    `x_col == y_cols[0]` names each event by its own date — odd, well-defined, drawable, and
+    scatter's and xrange's x-in-y tolerance exactly. The guard the other types carry exists to
+    stop a chart from ASSERTING something nobody claimed (a bullet bar on its own crossbar, a
+    dumbbell reporting no change); naming an event "2026-01-12" claims only what the date column
+    already says. So timeline stays out of `X_IN_Y_GUARD_TYPES`, and the absence is pinned here
+    because nothing else in the suite would notice a guard being added.
+    """
+    df = _timeline_df()
+    points = _timeline_points(build_options(df, "timeline", "date", ["date"]))
+    assert [p["name"] for p in points] == ["2026-01-12", "2026-02-23", "2026-06-29"]
+    assert points[0]["x"] < points[1]["x"] < points[2]["x"]  # still placed by time
+
+
+def test_timeline_refuses_a_column_that_is_not_dates_and_the_count_says_zero():
+    """The refusal, and the two layers that must disagree about how loudly to make it.
+
+    `build_options` RAISES, from the very constant `_timeline_events` returns rather than a
+    message composed at the call site — the `_SUNBURST_CYCLE` rule, so the two cannot drift.
+    A plain NUMBER loses here even though it would be a perfectly good xrange coordinate: a
+    timeline places its marks on a TIME axis, and rendered, a numeric column comes back as wide
+    coloured bands with the axis ticks overprinted by the event names.
+
+    `count_marks` must NOT raise on the same input. It runs ABOVE the app's guards, so a raise
+    there is a traceback on the page before anything can explain it — sunburst's and xrange's
+    rule. A chart that draws nothing counts nothing.
+    """
+    from highcharts_builder import _TIMELINE_NOT_A_DATE
+
+    numeric = pd.DataFrame(
+        {"milestone": ["Incorporated", "Seed round"], "quarter": [1, 2]}
+    )
+    expected = _TIMELINE_NOT_A_DATE.format(col="quarter")
+    with pytest.raises(ValueError) as excinfo:
+        build_options(numeric, "timeline", "milestone", ["quarter"])
+    assert str(excinfo.value) == expected  # the CONSTANT, not a paraphrase of it
+    assert count_marks(numeric, "timeline", "milestone", ["quarter"]) == 0
+
+    # A column of text loses too, and by the SAME message — timeline has one column-level
+    # contradiction where xrange has two, because it accepts one kind rather than either.
+    text = pd.DataFrame(
+        {"milestone": ["Incorporated"], "phase": ["discovery"]},
+    )
+    with pytest.raises(ValueError, match="doesn't read as dates"):
+        build_options(text, "timeline", "milestone", ["phase"])
+
+
+def test_date_columns_narrows_coordinate_columns_to_dates_alone():
+    """THE FACT THAT DECIDED THE ARCHITECTURE: the picker refuses what the builder would.
+
+    `date_columns` is `coordinate_columns` minus one kind, and that one kind is the whole of
+    timeline's guard story. Xrange's pickers are `coordinate_columns`, so a user really can
+    select a losing column and the app has to explain the loss afterwards (`explain_xrange_error`
+    exists for exactly that). A timeline's cannot: `_TIMELINE_NOT_A_DATE` is unreachable from the
+    UI, which is why this type ships with no `explain_*` twin and no app-side warning at all.
+    Making a contradiction unreachable beats explaining it.
+    """
+    from highcharts_builder import coordinate_columns, date_columns
+
+    df = pd.DataFrame(
+        {
+            "milestone": ["Incorporated", "Seed round"],
+            "date": ["2026-01-12", "2026-02-23"],
+            "headcount": [2, 3],
+        }
+    )
+    # Both agree the text column can place nothing; they disagree about the NUMBER, and that
+    # disagreement is the type's guard.
+    assert coordinate_columns(df) == ["date", "headcount"]
+    assert date_columns(df) == ["date"]
+    # ...and the column the narrower list drops is one `build_options` would have refused.
+    with pytest.raises(ValueError, match="doesn't read as dates"):
+        build_options(df, "timeline", "milestone", ["headcount"])
+
+
+def test_company_milestones_sample_builds_a_timeline_chart():
+    from sample_data import SAMPLES
+
+    df = SAMPLES["Company milestones (timeline)"]()
+    opts = build_options(df, "timeline", "milestone", ["date"])
+    points = _timeline_points(opts)
+    assert len(points) == len(df)  # nothing dropped, nothing appended
+    assert count_marks(df, "timeline", "milestone", ["date"]) == len(points)
+    # Column ORDER is load-bearing twice: the app's X picker lands on the FIRST column (the
+    # event name, which is the mark's whole identity here) and its Date picker on the first
+    # DATE column. A sample leading with the date would label both channels with dates.
+    assert list(df.columns)[:2] == ["milestone", "date"]
+    # The sample's own claim: the gaps are IRREGULAR, so the chart demonstrates that distance on
+    # the page is distance in time rather than merely exercising the branch. Evenly spaced
+    # events would draw whatever a category axis draws.
+    gaps = {
+        points[i + 1]["x"] - points[i]["x"] for i in range(len(points) - 1)
+    }  # in millis
+    assert len(gaps) > 1, "evenly spaced events would hide what a time axis is for"
 
 
 # --------------------------------------------------------------------------- #
@@ -9493,6 +10210,42 @@ def test_app_x_selection_survives_a_label_only_chart_type_switch(app):
     )
 
 
+def test_app_a_gate_that_stops_does_not_forget_the_keyed_pickers(app):
+    """The THIRD way a keyed picker can lose its answer, and the one no existing test covered.
+
+    The other two are label-only re-minting (the test above) and stale-value filtering (the test
+    below). This one is Streamlit's widget garbage collection: the session-state entry of any
+    keyed widget a run does not INSTANTIATE is discarded, and the no-plottable-columns gate
+    `st.stop()`s in the sidebar ABOVE both pickers. So visiting a type whose vocabulary the
+    current frame cannot satisfy silently forgets X — the very degradation the keys exist to
+    prevent, reached by a path the key alone cannot fix.
+
+    Measured before the fix: X = "cost", switch to `timeline` (the landing dataset has no date
+    column, so its row's gate fires), switch back to `line`, and X came back at "month". It
+    predates timeline — xrange's arm has always had the same shape — and `keep_picker_state()` in
+    front of the stop is what closes it.
+    """
+    x_axis = next(sb for sb in app.selectbox if sb.label == "Category (X) axis")
+    x_axis.set_value("cost").run()
+    assert not app.exception
+
+    _chart_type_selectbox(app).set_value("timeline").run()
+    assert not app.exception
+    assert any("no date columns" in error.value for error in app.error), (
+        "the landing dataset has no date column, so timeline's gate should have stopped the run"
+    )
+
+    _chart_type_selectbox(app).set_value("line").run()
+    assert not app.exception
+    assert (
+        next(sb for sb in app.selectbox if sb.label == "Category (X) axis").value
+        == "cost"
+    ), (
+        "the X selection was discarded by a gate that stopped the run above the picker — "
+        "the key survives a rerun, but not a run that never draws the widget"
+    )
+
+
 def test_app_dataset_switch_reconciles_a_stale_y_selection(app):
     # The other half of keying the Y pills. A key makes `default=` first-render-only, and
     # Streamlit's multiselect/pills FILTER a stored selection against the current options
@@ -10273,6 +11026,93 @@ def test_app_leaving_dumbbell_retires_the_after_control_and_the_changes_kpi(app)
     labels = {m.label for m in app.metric}
     assert "Changes" not in labels
     assert "Series plotted" in labels
+
+
+def _pick_timeline_sample(app):
+    """Select the timeline sample dataset and switch the chart type to timeline.
+
+    The DEFAULT dataset (monthly revenue vs cost) has NO date column at all — its `month` column
+    is the very one that must not sniff as a date (see `_coordinates`) — so on the landing data
+    this type does not merely draw an empty chart, it never gets a Date to select. That is not a
+    detail of this helper, it is the fact the whole architecture was decided from, and it has its
+    own test below.
+    """
+    return _pick_sample(app, "timeline")
+
+
+def test_app_timeline_on_a_dataset_with_no_dates_says_so_and_stops(app):
+    """THE GATE ARM, and the reason it is timeline's OWN rather than a share of xrange's.
+
+    The two exemptions are not the same exemption. Xrange is exempt from the no-numeric-columns
+    gate because a date column is object dtype and `select_dtypes("number")` cannot see it;
+    timeline is exempt from that gate AND held to a stricter one of its own. The app's LANDING
+    dataset is exactly where the difference bites: revenue and cost sail through `coord_cols`, so
+    a shared arm would let the page through and land the Date picker on `revenue` — then explain
+    that revenue does not read as dates, when the honest answer is that this dataset has no
+    dates at all.
+
+    It must STOP, not warn: with no date column there is nothing for the Date picker to offer,
+    so every control below it would be drawing on an empty list.
+    """
+    next(sb for sb in app.selectbox if sb.label == "Chart type").set_value(
+        "timeline"
+    ).run()
+    assert not app.exception  # a refusal, not a traceback
+    assert app.error
+    assert "no date columns" in app.error[0].value
+    # Stopped: the type-specific controls below the gate were never drawn.
+    assert not any(sb.label == "Date (when)" for sb in app.selectbox)
+    # And the gate is SPECIFIC — the same dataset is fine for a type that wants a number, which
+    # is what stops this arm from being the old blanket refusal in new words.
+    next(sb for sb in app.selectbox if sb.label == "Chart type").set_value("line").run()
+    assert not app.error
+
+
+def test_app_switch_to_timeline_shows_the_date_control_and_regenerates_config(app):
+    # Timeline adds NO kwarg — its Date rides `y_cols[0]` — so unlike the eight extra-column
+    # types there is no new control here at all; the Y picker is simply relabelled and re-sourced.
+    # That relabelling is the whole UI surface of the type, which is why it is asserted by LABEL.
+    assert not any(sb.label == "Date (when)" for sb in app.selectbox)
+    df = _pick_timeline_sample(app)
+    assert not app.exception
+    assert not app.error  # the gate arm above has nothing to say about this dataset
+
+    # X asks for the mark's whole IDENTITY (a timeline has no axis categories and no legend), and
+    # Y asks WHEN rather than how much — the parenthetical doing the work "Target (to)" and
+    # "Goal (target)" do, because this is the one slot where every other type asks a magnitude.
+    assert any(sb.label == "Event labels" for sb in app.selectbox)
+    date_picker = next(sb for sb in app.selectbox if sb.label == "Date (when)")
+    # Single-select: a second date column would be a second instant per row, which is an xrange.
+    assert not app.pills
+    assert not app.multiselect
+
+    # THE LANDING VALUE, not merely the options. The picker is sourced from `date_columns`, so
+    # its option list is already narrow — but which of them it LANDS on is the sample's column
+    # order, and that order is what makes the app draw the intended chart with no clicks.
+    assert list(date_picker.options) == ["date"]
+    assert date_picker.value == "date"
+    assert "headcount" not in date_picker.options  # a number cannot say WHEN
+
+    _reveal_config(app)
+    assert not app.exception
+    js = app.code[0].value
+    assert "type: 'timeline'" in js
+    # The dates reached the chart as a TIME axis rather than as categories or raw integers.
+    assert "type: 'datetime'" in js
+    assert f"name: '{df['milestone'][0]}'" in js
+
+
+def test_app_timeline_kpi_shows_events(app):
+    # Timeline is one series of events, so the KPI swaps "Series plotted" (which would read a
+    # bare 1, xrange's case exactly) for "Events". It appends nothing, so the count is exactly
+    # the rows that kept BOTH a drawable name and a real date.
+    df = _pick_timeline_sample(app)
+    assert not app.exception
+    metrics = _metrics(app)
+    assert "Series plotted" not in metrics
+    expected = count_marks(df, "timeline", "milestone", ["date"])
+    assert metrics["Events"] == f"{expected:,}"
+    assert expected == len(df)
 
 
 # --------------------------------------------------------------------------- #

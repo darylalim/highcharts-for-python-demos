@@ -27,13 +27,14 @@ from highcharts_builder import (
     NODE_LINK_TYPES,
     ORGANIZATION_TYPES,
     SUPPORTED_TYPES,
+    TIMELINE_TYPES,
     UNWEIGHTED_NODE_LINK_TYPES,
     VARIWIDE_TYPES,
     WEIGHTED_NODE_LINK_TYPES,
     X_IN_Y_GUARD_TYPES,
+    XRANGE_TYPES,
     build_chart_html,
     build_chart_png,
-    coordinate_columns,
     count_marks,
     explain_export_failure,
     explain_gauge_error,
@@ -41,6 +42,7 @@ from highcharts_builder import (
     explain_xrange_error,
     gauge_dial,
     make_chart,
+    picker_columns,
 )
 from sample_data import SAMPLES
 
@@ -53,6 +55,52 @@ RENDER_MODES = [MODE_INTERACTIVE, MODE_STATIC]
 # sidebar, so fall back to st.multiselect (selection-widgets.md bounds pills at
 # ~5 options).
 MAX_PILL_OPTIONS = 5
+
+# The keyed pickers, named once so the gate below and the widgets themselves cannot drift apart.
+# `y_pills` and `y_multiselect` are the SAME control under two commands (see the Y block), and
+# both are listed because which one exists depends on the frame's width.
+_KEYED_PICKERS = ("x_col", "y_pills", "y_multiselect")
+
+
+def keep_picker_state() -> None:
+    """Re-assign the keyed pickers' stored values, so a gate that ``st.stop()``s ABOVE them
+    doesn't discard the user's selection.
+
+    Streamlit garbage-collects the session-state entry of any keyed widget that is not
+    instantiated during a run, so an early ``st.stop()`` in the sidebar silently forgets a
+    keyed picker further down. Measured: choose X = ``cost`` on the landing dataset, switch to
+    ``timeline`` (whose gate stops, since that frame has no date column), switch back to
+    ``line`` — and X comes back at ``month``. That is exactly the degradation
+    ``test_app_x_selection_survives_a_label_only_chart_type_switch`` exists to prevent, reached
+    through a path it does not cover, and it predates timeline: xrange's arm has stopped above the
+    pickers since they were keyed in 0.18.1.
+
+    Re-assigning an entry to itself is the documented way to opt a key out of that cleanup. It
+    reads like a no-op and is not one, which is why it lives in a named function with this note
+    rather than inline at each call site.
+    """
+    for key in _KEYED_PICKERS:
+        if key in st.session_state:
+            st.session_state[key] = st.session_state[key]
+
+
+# The LAYOUT width handed to the export server for the Static PNG, in logical pixels.
+#
+# Without it the server lays every chart out at its own 600px default and `st.image(...,
+# width="stretch")` then STRETCHES that layout to the container — so the two render modes draw
+# genuinely different charts from one options dict, which this project treats as a bug class
+# rather than a tolerance. Highcharts lays out text at the width it is given: at 600 it starts
+# TRUNCATING labels ("Incorporat"), and truncation is not a scaling artefact that stretching can
+# undo. It bites hardest where a label IS the mark's identity — a timeline's events, where seven
+# of them already clip and twenty-seven are unreadable — but every type pays some of it.
+#
+# 800 rather than a round 1000: the chart sits in the LEFT column of `st.columns([3, 2])` on a
+# wide page, so this is the embed's realistic width rather than the window's. At `scale=2` that
+# is a 1600px image, which stays well inside the export server's limits.
+#
+# It is deliberately NOT the `Height (px)` slider's companion — there is no width slider, and
+# adding one would put a control in the sidebar that changes only ONE of the two render modes.
+CHART_PNG_WIDTH = 800
 
 # Short status badge (label, icon, color) shown above the chart per mode; the
 # caption below the chart carries the full description.
@@ -103,6 +151,18 @@ MARK_METRICS = {
     # bar per surviving row. A zero-length bar (a milestone) IS one of them — the builder
     # floors it to a visible sliver rather than dropping it, so counting it is honest.
     "xrange": "Bars",
+    # Timeline is the second type whose Y column is a COORDINATE, and the first whose marks
+    # carry no magnitude at all — so "Series plotted" would report its one event series as a
+    # bare 1 exactly as xrange's is. Its marks are the events: one per row that kept BOTH a
+    # drawable name and a real date, counted by `count_marks`' whole-build reuse. It never
+    # exceeds the row count (nothing is appended, xrange's case rather than sunburst's) and it
+    # is 0 for a date column that is not dates — a chart that draws nothing counts nothing.
+    #
+    # It sits BELOW `"xrange": "Bars"` rather than above it, and that is not cosmetic: this dict's
+    # convention is one rationale block immediately above the entry it argues for, and inserted
+    # the other way round it left xrange's milestone/sliver paragraph reading as timeline's — a
+    # type that has no zero-length mark at all.
+    "timeline": "Events",
     # Columnrange is a single low/high series like xrange is a single lane-bar series, so its
     # default "Series plotted" would misreport as 1 too. Its marks are the floating bars, one
     # per surviving category — a missing/inverted range keeps its slot as a null bar and still
@@ -225,6 +285,12 @@ def cached_chart_png(
     after_col,
     agg,
     dial,
+    # LAST in the signature, and passed BY KEYWORD at the call site, though nothing mechanical
+    # requires it: `width` is a render-mode-own parameter, so `_forwarded_arguments`' intersection
+    # of the three builders drops it and neither ast test would notice a transposition. But it and
+    # `height` are two ints side by side — the same-typed, positionally-interchangeable shape those
+    # tests were written for — so it is spelled the way they would demand if they could see it.
+    width,
 ) -> bytes:
     return build_chart_png(
         df,
@@ -232,6 +298,7 @@ def cached_chart_png(
         x_col,
         list(y_cols),
         height=height,
+        width=width,
         title=title,
         size_col=size_col,
         target_col=target_col,
@@ -368,13 +435,23 @@ with st.sidebar:
 
     numeric_cols = df.select_dtypes("number").columns.tolist()
     # The columns that can place an xrange bar on an axis: numbers OR dates. A superset of
-    # numeric_cols, and sourced from the builder (see `coordinate_columns`) so a picker can
+    # numeric_cols, and sourced from the builder (see `picker_columns`) so a picker can
     # never offer a column the builder would refuse. A date column is object dtype, so it is
     # invisible to `select_dtypes("number")` — which is exactly why the gate below could not
     # stay where it was: the canonical Gantt CSV (`task,start,end`, all dates) has NO numeric
     # columns at all, and the old gate stopped the app dead before the chart-type picker was
     # ever drawn. The gate has to know which type is being asked for, so it now runs AFTER it.
-    coord_cols = coordinate_columns(df)
+    # Both picker sources from ONE sniff of the frame — see `picker_columns`. They used to be two
+    # calls, which asked the same question of every column twice on every rerun (a slider drag, a
+    # title keystroke), for every chart type including the ones that use neither.
+    #
+    # `date_cols` is `coord_cols` narrowed to DATES ALONE, and the narrowing is the whole of
+    # timeline's guard story: xrange accepts a numeric coordinate (a bar spanning 3 to 8 is a
+    # legitimate span), while a timeline places instants on a TIME axis and a number cannot say
+    # when — rendered, a numeric one comes back as wide bands with the ticks overprinted by the
+    # event names. It is what lets that type ship with no `explain_*` and no app-side warning:
+    # the picker cannot offer a column the builder would refuse.
+    coord_cols, date_cols = picker_columns(df)
 
     st.header(":material/bar_chart: 2 · Chart")
     chart_type = st.selectbox(
@@ -450,6 +527,13 @@ with st.sidebar:
             "**same measurement at two times**, so what you read is the **connector** — its "
             "length is the change and its direction is the sign. A row missing either "
             "reading draws neither marker\n"
+            "- **timeline** — a sequence of dated **events**: an **Event** column naming each "
+            "one and a **Date (when)** column saying when it happened. Every event is one "
+            "instant on a shared spine, labelled in its own colour and staggered above and "
+            "below so the labels don't collide. The dates must be real dates (ISO-8601, e.g. "
+            "`2026-01-05`) — unlike xrange's Start/End a plain number won't do, because a "
+            "timeline places its marks on a **time** axis, so the spacing on the page is the "
+            "spacing in time. A row missing either its name or its date is dropped\n"
             "- **solidgauge / gauge** — one mark per **numeric column**, each collapsed to a "
             "single number by the aggregation you choose (sum / mean / …), all read against one "
             "shared dial. There is **no X column**: a gauge has no labels, only readings. "
@@ -470,20 +554,55 @@ with st.sidebar:
     # the picker was drawn refused those files at the door, with a message about a requirement the
     # type does not have. Neither unweighted type needs a gate of its own: with fewer than two
     # columns the Source == Target guard in the main panel says so.
-    if chart_type == "xrange" and not coord_cols:
-        st.error(
+    # ONE ROW PER COLUMN VOCABULARY, and the row is the whole of what a vocabulary needs: which
+    # columns can drive the Y control, what to say when the frame has none of them, and what to say
+    # when the user has cleared the selection. It replaced three hand-written arms plus a negated
+    # membership chain, where adding a type meant TWO independent edits — its own arm, and a
+    # `chart_type not in ...` clause on the numeric gate — and forgetting the second was silent:
+    # the type passed its own arm and was then refused by the numeric one with the wrong message.
+    #
+    # `None` in the source slot means EXEMPT rather than empty: the two unweighted node-link types
+    # read their columns as node/title LABELS and need no plottable column at all. They draw no Y
+    # control either, so the source is never read for them.
+    #
+    # Timeline's row is a STRICTER rule than xrange's, not a share of the same exemption. A frame
+    # with numbers and no dates satisfies xrange and must fail timeline — under one `coord_cols`
+    # row the landing dataset (revenue, cost) would sail through and land the Date picker on
+    # `revenue`, then explain that revenue does not read as dates, when the honest answer is that
+    # this dataset has no dates at all.
+    vocabularies = (
+        (
+            XRANGE_TYPES,
+            coord_cols,
             "This dataset has no date or number columns to place a bar on.",
-            icon=":material/error:",
-        )
-        st.stop()
-    if (
-        chart_type != "xrange"
-        and chart_type not in UNWEIGHTED_NODE_LINK_TYPES
-        and not numeric_cols
-    ):
-        st.error(
-            "This dataset has no numeric columns to plot.", icon=":material/error:"
-        )
+            "Pick a date or number column for the bar's start.",
+        ),
+        (
+            TIMELINE_TYPES,
+            date_cols,
+            "This dataset has no date columns to place an event on.",
+            "Pick a date column to say when each event happened.",
+        ),
+        (UNWEIGHTED_NODE_LINK_TYPES, None, "", ""),
+    )
+    y_source, no_columns_at_all, pick_a_column = next(
+        (
+            (source, missing, empty)
+            for family, source, missing, empty in vocabularies
+            if chart_type in family
+        ),
+        (
+            numeric_cols,
+            "This dataset has no numeric columns to plot.",
+            "Pick at least one numeric column to plot.",
+        ),
+    )
+    if y_source is not None and not y_source:
+        # BEFORE the stop, not after: this runs ABOVE the keyed X and Y pickers, and Streamlit
+        # discards the session-state entry of any keyed widget a run does not instantiate. See
+        # `keep_picker_state` for the measurement.
+        keep_picker_state()
+        st.error(no_columns_at_all, icon=":material/error:")
         st.stop()
 
     if chart_type == "pie":
@@ -549,6 +668,17 @@ with st.sidebar:
         # HOW MUCH. Single-select, like every other extra-column type — a second start column
         # would be a second bar per row, which is a second chart.
         x_label, y_label, multi = "Lane / task labels", "Start", False
+    elif chart_type in TIMELINE_TYPES:
+        # Xrange's coordinate Y with one end removed: the control says WHEN, not HOW MUCH, so it
+        # is labelled as a coordinate for xrange's Start/End reason. Single-select for the
+        # family's reason — a second date column would be a second instant per row, which is an
+        # xrange (two coordinates ARE a span) rather than a second timeline.
+        #
+        # "Date (when)" rather than a bare "Date", and the parenthetical is doing the same work
+        # the sidebar's others do ("Target (to)", "Goal (target)", "Size (Z)"): this is the Y
+        # slot, where every other type in the app asks HOW MUCH, so the one word that has to
+        # survive a reader skimming past is the one that says it is asking something else.
+        x_label, y_label, multi = "Event labels", "Date (when)", False
     elif chart_type in MAGNITUDE_RANGE_TYPES:
         # A category X axis (the bars stand on it / the band runs along it — column/bar's shape),
         # plus TWO magnitude columns: the Y control carries the LOW (bottom) and the dedicated High
@@ -762,19 +892,26 @@ with st.sidebar:
         else:
             y_cols = st.multiselect(y_label, numeric_cols, key=y_key)
     else:
-        # Xrange is the one type whose Y control is NOT sourced from numeric_cols. Its Y is a
-        # bar's START — a coordinate, which may be a date, and a date column is object dtype,
+        # Two types now source their Y control from something other than numeric_cols, and both
+        # do it because their Y is a COORDINATE rather than a magnitude: an xrange bar's START,
+        # and a timeline event's DATE. (This note read "the one type" until timeline arrived.)
+        # A date column is object dtype,
         # so `select_dtypes("number")` cannot see it. Widened to coord_cols rather than to
         # df.columns, which matters: coord_cols is the builder's OWN answer to "can this place
         # a bar on an axis" (see `coordinate_columns`), so the picker cannot offer a column of
         # task names that the builder would only turn around and reject. That is what keeps
         # `_plottable`'s documented invariant — the app never hands the builder a column it
         # can't coerce — true after the widening.
-        y_cols = [
-            st.selectbox(
-                y_label, coord_cols if chart_type == "xrange" else numeric_cols
-            )
-        ]
+        # `y_source` is the gate's own row, not a second lookup: the control offers exactly the
+        # list the gate has already guaranteed is non-empty for this type. That is what makes
+        # "the picker can never offer a column the builder would refuse" structural rather than
+        # a property two sites happen to agree on — three arms here beside three arms there was
+        # the shape that let them drift in the first place.
+        # `y_source` is `None` only for the UNWEIGHTED node-link row, and those types took the
+        # `y_cols = []` branch above rather than reaching this one — the builder's
+        # `assert end_col is not None  # guarded above` idiom, stated where the guarantee is made.
+        assert y_source is not None
+        y_cols = [st.selectbox(y_label, y_source)]
     # Normalize the widgets' loosely-typed return (pills/multiselect/selectbox) to a
     # concrete list[str] — the column names already are strings, so this only pins the
     # type. It is what lets every consumer below take a `list[str]` without re-narrowing:
@@ -1091,9 +1228,11 @@ with left.container(border=True, height="stretch"):
         # value channel, so an empty Y selection is their normal state, not an error (the mirror of
         # the gauge family, which is exempt from the X guard). The KPI row above already shows their
         # "Links"/"Reports" count over this same empty selection.
-        st.warning(
-            "Pick at least one numeric column to plot.", icon=":material/warning:"
-        )
+        # The message comes from the type's own vocabulary row, because "numeric" is simply wrong
+        # for the two types whose Y is a COORDINATE: xrange asks for a bar's start and timeline
+        # for a date. This is the same defect the gate above was split up to avoid — a message
+        # about a requirement the type does not have — left standing one guard further down.
+        st.warning(pick_a_column, icon=":material/warning:")
         st.stop()
     if chart_type in X_IN_Y_GUARD_TYPES and x_col in y_cols:
         st.warning(
@@ -1302,6 +1441,7 @@ with left.container(border=True, height="stretch"):
                 after_col=after_col,
                 agg=agg,
                 dial=dial,
+                width=CHART_PNG_WIDTH,
             )
         except Exception as exc:  # build error or export-server failure
             # The three causes need three different answers, and the builder owns the
