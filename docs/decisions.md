@@ -196,6 +196,9 @@ two of them look like the first:
    does not **instantiate**. The key survives a rerun; it does not survive a run that never
    reaches the widget. So an early `st.stop()` above the pickers silently forgets them — the
    exact degradation the keys exist to prevent, arriving down a path the key cannot defend.
+   Pinned twice, because it is one mode reached through two different stops: the vocabulary
+   gate's, and the no-CSV-uploaded one's (see the end of this entry, where the second stop's
+   exemption was measured away).
 
 The third was **measured**, not deduced. On the landing dataset: choose X = `cost`, switch to
 `timeline` (that frame has no date column, so the vocabulary gate errors and stops), switch back
@@ -214,13 +217,45 @@ so it lives in a named function with the measurement attached rather than inline
 site — an inline no-op is what a later "simplification" deletes.
 
 The rule for the next early stop: **a `st.stop()` above a keyed widget is a state deletion, not
-a control-flow choice.** It is not hypothetical elsewhere in this file either — the
-no-CSV-uploaded `st.info(...)` + `st.stop()` further up the sidebar has the identical shape, and
-measured the same way (X = `cost`, switch Source to Upload CSV, switch back) it still returns
-`month`. That one is left alone deliberately: the user is replacing the frame, so forgetting a
-column chosen against the old one is a defensible answer rather than a loss. The distinction to
-carry forward is whether the stop means *"this data cannot do that"* — where the selection is
-still about the frame in hand and must survive — or *"there is no data yet"*.
+a control-flow choice.** This entry granted that rule exactly one exemption, and **the exemption
+did not survive being measured**. The no-CSV-uploaded `st.info(...)` + `st.stop()` further up the
+sidebar has the identical shape, and it was left alone on the ground that *the user is replacing
+the frame, so forgetting a column chosen against the old one is a defensible answer rather than a
+loss*. The premise is false at precisely the moment that stop fires: it fires when **no file has
+been uploaded**, so there is no new frame and the old one is still on screen the instant the user
+goes back. Measured — X = `cost` on the landing dataset, switch Source to Upload CSV, choose
+nothing, switch back to the same sample — the columns never moved, nothing was replaced, nothing
+needed reconciling, and the answer was deleted anyway. `keep_picker_state()` now runs in front of
+that stop too, and `test_app_backing_out_of_an_upload_does_not_forget_the_keyed_pickers` pins it.
+
+The distinction the exemption was drawn on — *"this data cannot do that"* against *"there is no
+data yet"* — was the wrong axis, and what shows it is a **third** flow neither of those names.
+A **Dataset** switch also loses a selection, and is **not** a bug: X = `cost` on the landing
+frame, switch to `Fruit sales`, and the picker comes back at `fruit` (measured). The sharper
+rule, and the one to carry forward:
+
+> A selection may be dropped when it **stopped being valid**. It may not be dropped when it
+> merely **stopped being rendered**.
+
+The first is **reconciliation**, and it belongs to the widget: `cost` is not a column of the fruit
+frame, so the selectbox resets it (`pills`/`multiselect` filter theirs instead, which is failure
+mode 2 above and why only Y carries a seed). The second is **garbage collection**, and it is not
+an answer to anything — it happens because a run ended early, and it deletes a still-valid
+selection exactly as readily as a stale one. The old axis **licensed** the no-CSV stop by calling
+it *"there is no data yet"*; the new one refuses it, because "no data yet" describes the **run**
+and the rule is about the **value** — and nothing there had invalidated a value.
+
+That is also why preserving state in front of a stop stays safe when a file **is** uploaded and
+the frame really does change. `keep_picker_state()` restores only the *stored* value; a column the
+new frame does not have is still reset by the picker itself, the same mechanism the Dataset switch
+above relies on. Reconciliation is not being suppressed — it is being left to the widget, the only
+place that knows the new options.
+
+So there are now **two** stops calling `keep_picker_state()`, and **no exempt early stop is left**:
+the no-plottable-columns gate and the no-CSV-uploaded one are the only two `st.stop()`s in
+`streamlit_app.py` that sit *above* the pickers, and every other one sits below them, where the run
+has already instantiated them and there is nothing to collect. A new stop added above them inherits
+the rule rather than an argument for an exception to it.
 
 ## Light mode, and its removal
 
@@ -523,8 +558,10 @@ convenience, and the handful that do not (bubble's size, variwide's width) get o
 reason given below. Here the tooltip is the value's only home, and the general rule is the one
 this entry is named for: **a channel that is the only home for a value must follow that value's
 granularity, because there is no second reading to correct it.** The check is mechanical — for
-each value the chart claims to state, count the channels that state it; at one, formatting stops
-being cosmetic.
+each value the chart claims to state, count the channels that state it **at the granularity it
+has**; at one, formatting stops being cosmetic. That last qualifier is not decoration and was not
+in the first draft of this rule: it is what closing the xrange case below turned up, where a
+ticked axis states the endpoints *coarser* and so does not count.
 
 Dates are where this bites first, and the reason is worth keeping: a number reaches a tooltip as
 itself, while a date reaches it as the **output of a format string** — and a format string is
@@ -533,8 +570,8 @@ exactly the place granularity gets thrown away. So the same trap does not lurk i
 format string, no decision, nothing discarded.
 
 **The mechanism.** `_timeline_events` now returns a **3-tuple** — `(points, sub_day, problem)`,
-`_xrange_bars`' 4-tuple precedent — and `build_options` picks `_TIMELINE_INSTANT`
-(`%Y-%m-%d %H:%M`) or `_TIMELINE_DAY` (`%Y-%m-%d`) from it. `sub_day` is returned rather than
+`_xrange_bars`' multi-value return the precedent — and `build_options` picks `_TOOLTIP_INSTANT`
+(`%Y-%m-%d %H:%M`) or `_TOOLTIP_DAY` (`%Y-%m-%d`) from it. `sub_day` is returned rather than
 derived by the caller because it is a **column**-level fact about the coerced values, and the
 caller holds only the point dicts, whose `x` is typed `object`. It is computed as
 `any(when % _MILLIS_PER_DAY for when, _ in events)`: a date parses to exact midnight UTC, so a
@@ -563,23 +600,72 @@ noise that *looks* like data, since a reader has no way to tell a real midnight 
 one. Both directions lose information; only one loses it on the rows that have it.
 
 Two smaller notes. The formats are **named constants**, not literals inside an f-string, because
-the pair is a choice and a choice with two spellings in two branches is how they drift apart.
+the pair is a choice and a choice with two spellings in two branches is how they drift apart —
+and the branches are now in two *types* rather than two arms of one, which is what the closure
+below turned that note from a tidiness into a mechanism.
 And both are interpolated into a `pointFormat` that opens with `<b>`, which is what keeps the
 widened one out of the unquoted-object trap above — a value that opened `{` and carried two
 colons against two brace-pairs would serialize bare and blank the iframe, and
 `%Y-%m-%d %H:%M` adds exactly one more colon to a string that is already close to the margin.
 
-**Where the rule points next, and is not yet followed.** `xrange` is the same shape one type
-over, and saying so is the point of writing the rule down rather than the branch. Its span
-format already switches — but on the **axis kind**, dates against numbers, never on granularity —
-so two same-day tasks, `09:30 → 17:45` and `18:00 → 19:00`, both come back as
-`2026-01-12 → 2026-01-12` (round-tripped through `build_options`). That is worse than coarse: two
-identical dates is precisely how a **milestone** reads, the zero-length span xrange deliberately
-floors to a visible sliver, so the tooltip does not merely lose the hours, it states a different
-kind of event. It is left alone here for reasons of scope rather than of principle — the exposure
-is lower, since an xrange's two ends land on a real ticked axis (its own entry's argument for
-printing nothing in the mark) where a timeline point sits between month ticks, and the fix would
-change a shipped type's tooltip. The rule identifies the case; this release does not close it.
+**Where the rule pointed next — and now goes.** `xrange` is the same shape one type over, and
+saying so is the point of writing the rule down rather than the branch. Its span format already
+switched — but on the **axis kind**, dates against numbers, never on granularity — so two same-day
+tasks, `09:30 → 17:45` and `18:00 → 19:00`, both came back as `2026-01-12 → 2026-01-12`
+(round-tripped through `build_options`). That is worse than coarse: two identical dates is
+precisely how a **milestone** reads, the zero-length span xrange deliberately floors to a visible
+sliver, so the tooltip did not merely lose the hours, it stated a different kind of event.
+
+This entry first recorded that case as identified and deferred, on scope rather than principle:
+the exposure looked lower, since an xrange's two ends land on a real ticked axis (its own entry's
+argument for printing nothing in the mark) where a timeline point sits between month ticks, and
+the fix would change a shipped type's tooltip. **Both halves of that are now retired, and the
+first was wrong on its own terms.** The ticked axis is a second reading of the mark's
+*placement*, and the defect was never a placement defect — the coordinates are distinct and the
+bars are drawn exactly where they belong (the test asserts the two SPANS are distinct, which is
+the half that matters: two bars a reader must tell apart). What has no second reading is
+the *endpoint as a value*, which the axis states only to tick resolution — and that is the
+**generalization the closure buys**, worth more than the fix: the rule is not *the only channel*
+but *the only channel at this granularity*, so a value that appears elsewhere **coarser** is a
+value with one home, and "there is an axis" is not a defence. "Lower exposure" was measuring the
+wrong quantity. The second half is a real cost and simply not a large one: the changed tooltip
+is a **strict refinement** — a whole-day Gantt, which is the shipped sample and the commoner
+input, is byte-identical, and only a frame that carries hours sees anything new. A rule that
+declines to apply the first time it points somewhere is not a rule; it is the branch it was
+written to replace.
+
+**The mechanism, one type over.** `_xrange_bars` returns a **5-tuple**,
+`(points, lanes, is_datetime, sub_day, problem)`, and the span interpolates the same
+`_TOOLTIP_INSTANT` / `_TOOLTIP_DAY` pair. Every detail above carries over — including the UTC
+answer, since a column of `+05:30` midnights widens an xrange's span exactly as it widens a
+timeline's tooltip (round-tripped) — and this shape adds one the other cannot have. The flag
+is accumulated **in the drawn-bar loop** rather than derived from `points` afterwards, which is
+timeline's reason restated — a point's `x` is typed `object`, so the modulo would need a cast the
+loop already avoids — and it is accumulated *after* the `_spannable` skip, so a dropped bar's
+hours cannot widen a tooltip that will never mention it. It stays a **column policy**: one timed
+row among whole-day ones widens every tooltip in the chart (measured), because `pointFormat` is
+one string per series. And widening unconditionally is still the wrong trade the other way, so
+the day form is pinned as hard as the instant one. The addition is a **third** case the timeline
+shape cannot have: on a **numeric** axis the span prints bare coordinates, so there is no
+precision to pick, and `sub_day` is reported `False` there (`sub_day and is_datetime`) rather
+than as the meaningless remainder of a plain number modulo a day's worth of milliseconds. All
+three cases are pinned by `test_xrange_span_keeps_the_time_when_the_data_carries_one` — the
+interesting part being that they stay three.
+
+**Two things the closure forced, both worth more than the diff that caused them.** First, the
+constants were `_TIMELINE_DAY` / `_TIMELINE_INSTANT` and are now `_TOOLTIP_DAY` /
+`_TOOLTIP_INSTANT`: they were named for the type that introduced them, and xrange — the very next
+thing the rule touched — picks from the same pair, so a **type name on a shared constant is
+already a lie**. The
+next type the rule reaches would either rename it or, worse, copy it. Second, `explain_xrange_error`
+read `_xrange_bars(...)[3]` for its `problem`, and inserting `sub_day` at slot 3 quietly moved
+`problem` to slot 4: the read stopped meaning "the reason these columns can't share an axis" and
+started meaning "is this a date axis", **without changing**. Here `ty` caught it, because the
+function is annotated `-> str | None` and a `bool` is not — but that defence is a coincidence of
+the two types rather than a property of the read, and it disappears the moment a future slot is
+also `str | None`. It is now a full named unpack, which breaks at the read whatever the types are.
+The general form: **a positional index into a tuple that can grow is a silent rename**, and the
+only reliable objection to it is a name.
 
 Last, the **way it was found**, which is the transferable part. This type had been verified by
 rendering repeatedly — the spine hue, the sorted order, the dataLabel stagger, the 600px

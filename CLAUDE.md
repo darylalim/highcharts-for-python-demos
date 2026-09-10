@@ -395,18 +395,24 @@ Why static, and why that test clears the caches on the way *out*:
 **Widget identity** is pinned the same way, and for the same reason — nothing else would
 notice its removal. Streamlit folds every command kwarg into a *keyless* widget's element id,
 the **label included**, so the X and Y pickers (whose labels vary by chart type while their
-options do not) carry a `key=` and would silently reset without one. Four AppTests hold that
+options do not) carry a `key=` and would silently reset without one. Five AppTests hold that
 down, over **three distinct failure modes**: two that a selection survives a label-only
 chart-type switch (X, and Y) — re-minting; one that a Dataset switch **reconciles** a stale Y
-instead of landing on the empty-Y guard — filtering; and one that a gate which `st.stop()`s
-*above* the pickers does not forget them — **garbage collection**, which a `key=` alone cannot
-fix, since Streamlit drops the stored value of any keyed widget a run never instantiates.
+instead of landing on the empty-Y guard — filtering; and **two** that a stop *above* the pickers
+does not forget them — **garbage collection**, which a `key=` alone cannot fix, since Streamlit
+drops the stored value of any keyed widget a run never instantiates.
 `keep_picker_state()` (naming the three keys in `_KEYED_PICKERS`) re-assigns each entry to
 itself in front of such a stop, which is the documented opt-out; it reads like a no-op and is
-not one. Note the two widget families differ and the code differs with them — `selectbox`
-*resets* an invalid stored value on its own (so X needs no reconciliation), while
-`multiselect`/`pills` *filter* theirs to `[]` (so Y does). Verify any change here by breaking
-it; all four mutations are one-liners (the fourth: delete the `keep_picker_state()` call).
+not one. The fifth test adds **no fourth mode** — it is garbage collection again, reached through
+the *other* early stop (backing out of an upload that was never made), because the mode belongs to
+the **stop** rather than to the gate: both stops above the pickers now call
+`keep_picker_state()` and none is exempt. Note the two widget families differ and the code differs
+with them — `selectbox` *resets* an invalid stored value on its own (so X needs no
+reconciliation), while `multiselect`/`pills` *filter* theirs to `[]` (so Y does). The rule that
+separates a correct loss from a bug: a selection may be dropped when it stopped being **valid**
+(the widget reconciles it), never when it merely stopped being **rendered**. Verify any change
+here by breaking it; all five mutations are one-liners (the last two: delete either
+`keep_picker_state()` call).
 
 ## Lint & format
 
@@ -521,8 +527,12 @@ conventions in their original, fully-enumerated form); the argument behind each 
   uniqueness claims, and each is a claim about *every other type* — including ones that
   don't exist yet — so a new type can make a sentence false in a passage no diff touched,
   locally correct on both sides, with only the *pair* contradicting. Nothing mechanical
-  can see it. After adding a type, sweep **both `CLAUDE.md` and `docs/chart-types.md`**
-  (and the builder's own comments, which carry the same claims):
+  can see it. **Closing a recorded open case does the same thing** — the trigger is a new
+  *instance of a property*, which a fix produces as readily as a new type does: applying the
+  tooltip-granularity rule to `xrange` added no type and still falsified "that matters **here and
+  nowhere else in the app**" — while the superlative beside it, scoped to a timeline's own
+  channels, survived untouched. So sweep after either, over **both `CLAUDE.md` and
+  `docs/chart-types.md`** (and the builder's own comments, which carry the same claims):
 
   ```bash
   grep -noE 'the [*_`]*(one|only)[*_`]* [a-zA-Z*`_.]+ [a-zA-Z*`_.]+' CLAUDE.md docs/chart-types.md
@@ -594,8 +604,13 @@ conventions in their original, fully-enumerated form); the argument behind each 
   and carries **at least as many colons as brace-pairs** is written as a bare JS object on **any
   key and any axis** —
   `{"format": "{value:%b %Y}"}` becomes `format: {value:%b %Y}`. It is a property of the VALUE:
-  `dataLabels.format` and a series `pointFormat` are **not** exempt, and timeline's tooltip is
-  safe only because it opens with `<b>` (the `{point.name}: {point.y}` pie, funnel and pyramid
+  `dataLabels.format` and a series `pointFormat` are **not** exempt, and the timeline and xrange
+  tooltips — the two interpolating `_TOOLTIP_INSTANT`/`_TOOLTIP_DAY` — are
+  safe only because they open with `<b>`. Read that narrowly: stripping the whole
+  `<b>{point.name}</b><br/>` prefix removes the brace-pair that SUPPLIED the margin, so under it
+  every form of both types goes bare — the widened precision introduces no new margin of its own,
+  since each added colon arrives inside an added brace-pair (the `{point.name}: {point.y}` pie,
+  funnel and pyramid
   share is safe only because it is one colon short of its two brace-pairs — add a `:.1f` and it
   goes through bare). Swept by
   `test_no_supported_type_emits_an_unquoted_format_object`, whose pattern is

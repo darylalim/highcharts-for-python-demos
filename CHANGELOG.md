@@ -290,19 +290,18 @@ suite:
 - **The tooltip printed one reading for two different instants.** `date_columns` admits an
   ISO-8601 column with a clock time in it — as it must — and under a fixed `%Y-%m-%d` a deploy
   starting 09:30 and ending 17:45 drew two marks at two distinct coordinates whose tooltips both
-  said `2026-01-12`. That matters here and nowhere else in the app because a timeline's tooltip is
-  the **only** channel that states the instant: the ticks are months, the marks are points, and
-  the dataLabels carry the event's name. `_timeline_events` now returns a **3-tuple**
+  said `2026-01-12`. That matters because a timeline's tooltip is the **only** channel that states
+  the instant at all: the ticks are months, the marks are points, and the dataLabels carry the
+  event's name. `_timeline_events` now returns a **3-tuple**
   (`points, sub_day, problem` — `_xrange_bars`' precedent), `sub_day` being
   `any(when % _MILLIS_PER_DAY ...)` over the coerced values, and the branch picks
   `%Y-%m-%d %H:%M` or `%Y-%m-%d` from it. Widening it unconditionally is the wrong trade the
   other way — every milestone tooltip would trail a meaningless ` 00:00` — so both precisions are
   pinned. Found by **review, not by rendering**: this type was rendered repeatedly, and every
   frame rendered had day granularity, which is the general shape of the lesson. The rule it
-  generalizes to names one case this release does **not** close — `xrange`'s span format switches
-  on the axis *kind* and never on granularity, so two same-day tasks read as one identical
-  zero-length span — recorded rather than fixed, since that is a shipped type's tooltip
-  ([both](docs/decisions.md#tooltip-precision-when-a-channel-is-a-values-only-home)).
+  generalizes to named one further case, `xrange`'s span format, which was written down here and
+  **left open** — see the round below, which closed it and sharpened the rule in the process
+  ([the argument](docs/decisions.md#tooltip-precision-when-a-channel-is-a-values-only-home)).
 - **The sidebar sniffed every column twice on every rerun.** `coordinate_columns` and
   `date_columns` were two `df.columns` loops over `_coordinates`, which runs a `to_datetime`
   *and* a `to_numeric` coercion per object column — the sidebar's most expensive operation on a
@@ -356,6 +355,61 @@ suite:
   pass this release made over its own prose. The rule the release adds: **a fix must sweep the
   prose that explained the old mechanism, wherever it lives**, and a comment in a test fixture is
   prose.
+
+Then a **second round, over the notes the first one wrote**. Its whole finding is that this
+release's own record named **two** open cases and left both open — one deferred on scope, one
+granted as an exception in the sentence immediately after the rule it contradicts. Both are closed here, and
+neither closure needed new investigation: the notes had already done the finding, which is what a
+decision record is *for*. An open item that ages instead of closing is how a record turns into
+folklore, and both arguments turned out to be weaker on re-reading than they had looked when
+written:
+
+- **The rule that pointed at `xrange` and stopped there.** Its span format switched on the axis
+  **kind** — dates against numbers — and never on granularity, so two same-day tasks
+  (`09:30 → 17:45`, `18:00 → 19:00`) both came back `2026-01-12 → 2026-01-12`: not merely coarse,
+  but the reading a zero-length **milestone** has, so the tooltip named a different kind of event
+  from four genuinely distinct coordinates. The deferral said the exposure was lower because an
+  xrange's ends land on a real ticked axis. That does not hold — the axis is a second reading of
+  the bar's *placement*, which was never wrong, and it states the endpoints only to **tick
+  resolution** — and the rule is sharper for it: count the channels that state a value **at the
+  granularity it has**, so a channel that states it coarser does not count. `_xrange_bars` now
+  returns a **5-tuple** (`points, lanes, is_datetime, sub_day, problem`), `sub_day` accumulated
+  over the **drawn** bars only and `and`-ed with `is_datetime`, so a numeric axis reports `False`
+  rather than a plain number's meaningless remainder modulo a day.
+  `test_xrange_span_keeps_the_time_when_the_data_carries_one` pins all three forms; a whole-day
+  Gantt is byte-identical, since widening unconditionally is the failure in the other direction.
+- **Two things that closure forced**, both worth more than the fix. `explain_xrange_error` read
+  `_xrange_bars(...)[3]` for its `problem`, and inserting `sub_day` at slot 3 moved `problem` to
+  slot 4 — the read kept working and quietly started meaning `is_datetime`. `ty` caught this one
+  only because the function is annotated `-> str | None` and the slot that moved in is a `bool`; a
+  future slot typed `str | None` would land there in silence, so the defence was the annotation's
+  and never the read's. It is a full named unpack now: **a positional index into a tuple that can
+  grow is a silent rename.** And `_TIMELINE_DAY` / `_TIMELINE_INSTANT` are now `_TOOLTIP_DAY` /
+  `_TOOLTIP_INSTANT`, because the very next thing the rule touched picks from the same pair and
+  **a type name on a shared constant is already a lie**.
+- **The one early stop the keyed-picker rule exempted.** That entry ended with the rule — *a
+  `st.stop()` above a keyed widget is a state deletion, not a control-flow choice* — and then
+  exempted the no-CSV-uploaded `st.info(...)` + `st.stop()`, on the ground that the user is
+  replacing the frame so forgetting a column chosen against the old one is defensible. The premise
+  is false at exactly the moment that stop fires: it fires when **no file has been uploaded**, so
+  the frame is identical before and after. Measured — X = `cost`, switch Source to Upload CSV,
+  choose nothing, switch back to the same sample — nothing was replaced, nothing needed
+  reconciling, and the selection was deleted anyway. `keep_picker_state()` now runs there too
+  (`test_app_backing_out_of_an_upload_does_not_forget_the_keyed_pickers`), which makes **two**
+  stops calling it and leaves no exempt early stop in the sidebar.
+- **The distinction that replaced it is sharper than the one it replaced**, and a third flow is
+  what produced it. A **Dataset** switch also loses a selection and is **not** a bug: X = `cost` on
+  the landing frame, switch to `Fruit sales`, and the picker comes back at `fruit` (measured). So
+  the axis is not *"this data cannot do that"* against *"there is no data yet"* — those describe
+  the **run**. It is whether the value **stopped being valid** (reconciliation, which belongs to
+  the widget) or merely **stopped being rendered** (garbage collection, which is not an answer to
+  anything and deletes a valid selection as readily as a stale one). That also shows why
+  preserving state in front of a stop stays safe when a file really is uploaded:
+  `keep_picker_state()` restores only the *stored* value, and a column the new frame lacks is still
+  reset by the picker itself — the same mechanism the Dataset switch relies on. The failure-mode
+  count does **not** go up: `CLAUDE.md` now says five AppTests over the same three modes, the fifth
+  being garbage collection reached through the other stop, because the mode belongs to the stop and
+  not to the gate.
 
 ## [0.19.0] - 2026-09-08
 

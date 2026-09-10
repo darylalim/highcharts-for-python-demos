@@ -856,12 +856,15 @@ _XRANGE_POINT_WIDTH = 20
 # arithmetic on the values already coerced, rather than a second parse of the strings.
 _MILLIS_PER_DAY = 86_400_000
 
-# The two tooltip precisions, picked per frame by `_timeline_events`' `sub_day`. Both are
+# The two tooltip precisions, picked per frame by the `sub_day` that `_timeline_events` and
+# `_xrange_bars` each return. Named `_TOOLTIP_*` rather than `_TIMELINE_*`: they arrived with
+# timeline and xrange took them the same day its rule was written down, so a type name on
+# them would already be a lie. Both are
 # Highcharts date-format strings, and both are interpolated into a `pointFormat` that OPENS with
 # `<b>` — which is what keeps them out of the unquoted-object trap: a value that opened `{` and
 # carried a colon would serialize as a bare JS object (see the branch's note).
-_TIMELINE_DAY = "%Y-%m-%d"
-_TIMELINE_INSTANT = "%Y-%m-%d %H:%M"
+_TOOLTIP_DAY = "%Y-%m-%d"
+_TOOLTIP_INSTANT = "%Y-%m-%d %H:%M"
 
 _TIMELINE_NOT_A_DATE = (
     "The {col!r} column doesn't read as dates, so it can't say WHEN an event happened. A "
@@ -2342,8 +2345,19 @@ def _sunburst_levels(max_level: int) -> list[dict[str, object]]:
 
 def _xrange_bars(
     df: pd.DataFrame, x_col: str, start_col: str, end_col: str
-) -> tuple[list[dict[str, object]], list[str], bool, str | None]:
-    """Assemble a frame into an xrange's bars: ``(points, lanes, is_datetime, problem)``.
+) -> tuple[list[dict[str, object]], list[str], bool, bool, str | None]:
+    """Assemble a frame into an xrange's bars: ``(points, lanes, is_datetime, sub_day, problem)``.
+
+    ``sub_day`` says whether any DRAWN bar has EITHER END carrying a time of day — either end, not
+    the ``end_col`` its name sits beside: a task starting 09:30 and ending at midnight widens the
+    span just as one ending 17:45 does. It is
+    timeline's flag applied one type over — the rule that a channel which is a value's ONLY home
+    must follow the data's granularity. It is not a nicety here: the span format switched on the
+    AXIS KIND alone, so two same-day tasks (``09:30 → 17:45`` and ``18:00 → 19:00``) both came
+    back as ``2026-01-12 → 2026-01-12``. That is worse than coarse — two identical dates is
+    precisely how a MILESTONE reads, the zero-length span this type deliberately floors to a
+    visible sliver — so the tooltip did not merely lose the hours, it stated a different kind of
+    event.
 
     The WHOLE build, shared by ``build_options`` and ``count_marks`` — ``_sunburst_tree``'s
     contract. Xrange reaches for it for a reason that is subtler than sunburst's, and easy to
@@ -2384,7 +2398,13 @@ def _xrange_bars(
         (end_col, end_kind, "end"),
     ):
         if kind == _COORD_NEITHER:
-            return [], [], False, _XRANGE_NOT_COORDINATE.format(col=col, end=end_name)
+            return (
+                [],
+                [],
+                False,
+                False,
+                _XRANGE_NOT_COORDINATE.format(col=col, end=end_name),
+            )
     # The two ends must agree about which axis they are on — but only the columns that HAVE an
     # opinion get a vote. An EMPTY column makes no claim (see `_COORD_EMPTY`), so it is
     # compatible with either kind and cannot manufacture a disagreement: a blank End column
@@ -2397,6 +2417,7 @@ def _xrange_bars(
             [],
             [],
             False,
+            False,
             _XRANGE_AXIS_MISMATCH.format(
                 start_col=start_col,
                 end_col=end_col,
@@ -2408,9 +2429,17 @@ def _xrange_bars(
     lanes: list[str] = []
     lane_index: dict[str, int] = {}
     points: list[dict[str, object]] = []
+    # Whether any DRAWN bar has EITHER END that is not exact midnight UTC — timeline's `sub_day`, one
+    # type over, and accumulated in the loop rather than derived from `points` afterwards for the
+    # reason it is returned rather than recomputed there: a point's `x` is typed `object`, so the
+    # modulo would need a cast the loop does not.
+    sub_day = False
     for label, start, end in zip(labels, starts, ends, strict=True):
         if not _spannable(start, end):
             continue
+        sub_day = (
+            sub_day or bool(start % _MILLIS_PER_DAY) or bool(end % _MILLIS_PER_DAY)
+        )
         # `_node_key`, not a bare `str()`: a lane column holding one blank cell is widened to
         # float64 by pandas, and `str()` would then label lane 1 as "1.0". Nothing has to
         # MATCH here (unlike sunburst, where the same trap dangles every parent and empties
@@ -2436,7 +2465,11 @@ def _xrange_bars(
     # Read from the voting columns, not from `start_kind` alone: with an EMPTY start beside a
     # date end, the axis is still a date axis (no bar draws either way, but the axis should not
     # claim otherwise). `kinds` holds at most one entry by the check above.
-    return points, lanes, _COORD_DATE in kinds, None
+    # `sub_day` is meaningful only on a DATE axis — on a numeric one the span format prints the
+    # bare coordinates and there is no precision to pick — so it is reported as False there rather
+    # than as the meaningless remainder of a plain number modulo a day's worth of milliseconds.
+    is_datetime = _COORD_DATE in kinds
+    return points, lanes, is_datetime, sub_day and is_datetime, None
 
 
 def _timeline_events(
@@ -3650,7 +3683,7 @@ def build_options(
                         "tooltip": {
                             "headerFormat": "",
                             "pointFormat": (
-                                f"<b>{{point.name}}</b><br/>{{point.x:{_TIMELINE_INSTANT if sub_day else _TIMELINE_DAY}}}"
+                                f"<b>{{point.name}}</b><br/>{{point.x:{_TOOLTIP_INSTANT if sub_day else _TOOLTIP_DAY}}}"
                             ),
                         },
                         # NO dataLabels key, and that is this type's one INVERSION of the module's
@@ -4495,7 +4528,7 @@ def build_options(
     ):  # a Gantt timeline: bars spanning [start, end] on lanes
         assert end_col is not None  # guarded above for xrange
         start_col = y_cols[0]
-        points, lanes, is_datetime, problem = _xrange_bars(
+        points, lanes, is_datetime, sub_day, problem = _xrange_bars(
             df, x_col, start_col, end_col
         )
         if problem:
@@ -4524,8 +4557,13 @@ def build_options(
 
         # A datetime axis must FORMAT its endpoints: {point.x} alone prints raw epoch millis
         # (verified by rendering — a bar labelled "1767571200000").
+        # The precision follows the data, timeline's rule reached from the same premise: the
+        # tooltip is where a reader gets the exact endpoints, and printing days for a same-day
+        # pair states a milestone. `sub_day` is already False on a numeric axis, so the three
+        # cases stay one expression.
+        instant = _TOOLTIP_INSTANT if sub_day else _TOOLTIP_DAY
         span = (
-            "{point.x:%Y-%m-%d} → {point.x2:%Y-%m-%d}"
+            f"{{point.x:{instant}}} → {{point.x2:{instant}}}"
             if is_datetime
             else "{point.x} → {point.x2}"
         )
@@ -5073,7 +5111,16 @@ def explain_xrange_error(
     which is precisely why this function reports rather than assumes: the guard in the app is
     belt, and the returned message is braces.
     """
-    return _xrange_bars(df, x_col, start_col, end_col)[3]
+    # Unpacked in full rather than indexed: this read `[3]` until `sub_day` joined the tuple, at
+    # which point the same index meant `is_datetime`. A positional index into a tuple that can grow
+    # is a SILENT RENAME — and the narrower truth is worth keeping, since it is what would have
+    # happened here: `ty` did catch this one, but only because a `bool` met a `-> str | None`
+    # annotation, a coincidence that evaporates the moment the new slot is also `str | None`. The
+    # named unpack breaks at the read either way.
+    _points, _lanes, _is_datetime, _sub_day, problem = _xrange_bars(
+        df, x_col, start_col, end_col
+    )
+    return problem
 
 
 # The kinds each picker source accepts, named so the two lists below are ONE MEMBERSHIP TEST
@@ -5238,7 +5285,7 @@ def count_marks(
         # `_spannable` could therefore sniff a different axis than the chart drew. Reusing the
         # build makes that unrepresentable — this IS `len(series[0]["data"])`.
         assert end_col is not None  # the app only counts what it can also build
-        points, _lanes, _is_datetime, problem = _xrange_bars(
+        points, _lanes, _is_datetime, _sub_day, problem = _xrange_bars(
             df, x_col, y_cols[0], end_col
         )
         # A contradictory column pair draws nothing — build_options raises, the app warns and
