@@ -4983,6 +4983,64 @@ def test_coordinate_columns_offers_numbers_and_dates_but_not_text():
     assert set(df.select_dtypes("number")) <= set(coordinate_columns(df))
 
 
+def test_xrange_span_keeps_the_time_when_the_data_carries_one():
+    """Timeline's tooltip-precision rule, applied one type over — and here it was worse than
+    coarse rather than merely coarse.
+
+    The span format switched on the AXIS KIND alone (dates against numbers), never on
+    granularity, so two same-day tasks — `09:30 → 17:45` and `18:00 → 19:00` — both came back as
+    `2026-01-12 → 2026-01-12`, from four genuinely distinct coordinates. Two identical dates is
+    precisely how a MILESTONE reads, the zero-length span this type deliberately floors to a
+    visible sliver, so the tooltip did not lose the hours: it stated a different KIND of event.
+
+    All three cases are pinned, because the interesting part is that they stay three. A numeric
+    axis has no precision to pick — `sub_day` is reported False there rather than as the
+    meaningless remainder of a plain number modulo a day — and a whole-day Gantt must not start
+    trailing " 00:00" on every bar.
+    """
+    same_day = pd.DataFrame(
+        {
+            "task": ["morning", "evening"],
+            "start": ["2026-01-12T09:30:00Z", "2026-01-12T18:00:00Z"],
+            "end": ["2026-01-12T17:45:00Z", "2026-01-12T19:00:00Z"],
+        }
+    )
+    widened = build_options(same_day, "xrange", "task", ["start"], end_col="end")
+    assert (
+        widened["tooltip"]["pointFormat"]
+        == "<b>{point.name}</b><br/>{point.x:%Y-%m-%d %H:%M} → {point.x2:%Y-%m-%d %H:%M}"
+    )
+    # The four coordinates really are distinct, so the tooltip was fixing a READING problem
+    # rather than covering for a placement one.
+    ends = {(p["x"], p["x2"]) for p in widened["series"][0]["data"]}
+    assert len(ends) == 2
+
+    # A whole-day Gantt keeps the day form — including a MILESTONE, whose two identical dates are
+    # now the only thing that reads that way.
+    whole_days = _xr()
+    assert (
+        whole_days["tooltip"]["pointFormat"]
+        == "<b>{point.name}</b><br/>{point.x:%Y-%m-%d} → {point.x2:%Y-%m-%d}"
+    )
+    # A numeric axis prints bare coordinates, so there is no date precision to pick at all.
+    numeric = pd.DataFrame({"task": ["a", "b"], "start": [1.0, 3.0], "end": [2.0, 8.0]})
+    assert (
+        build_options(numeric, "xrange", "task", ["start"], end_col="end")["tooltip"][
+            "pointFormat"
+        ]
+        == "<b>{point.name}</b><br/>{point.x} → {point.x2}"
+    )
+    # ...and the FLAG itself, not just the format it happens to pick. On a numeric axis the span is
+    # chosen by `is_datetime` alone, so `sub_day` is unobservable from the emitted options — which
+    # made this half of the branch pin NOTHING: mutating `sub_day and is_datetime` to a bare
+    # `sub_day` left the entire suite green. `3 % 86_400_000` is 3, so the bare form would report a
+    # plain number's remainder as a time of day, and the day a numeric axis learns a precision that
+    # becomes a wrong one.
+    from highcharts_builder import _xrange_bars
+
+    assert _xrange_bars(numeric, "task", "start", "end")[3] is False
+
+
 def test_xrange_serializes_and_resolves_the_xrange_module():
     chart = make_chart(_plan(), "xrange", "lane", ["start"], end_col="end")
     js = chart.to_js_literal()
@@ -10243,6 +10301,41 @@ def test_app_a_gate_that_stops_does_not_forget_the_keyed_pickers(app):
     ), (
         "the X selection was discarded by a gate that stopped the run above the picker — "
         "the key survives a rerun, but not a run that never draws the widget"
+    )
+
+
+def test_app_backing_out_of_an_upload_does_not_forget_the_keyed_pickers(app):
+    """The SECOND early stop above the pickers, and the one whose exemption did not survive
+    being measured.
+
+    `docs/decisions.md` argued this one could be left alone — "the user is replacing the frame,
+    so forgetting a column chosen against the old one is defensible". But with NO file uploaded
+    the frame is identical before and after: the user switches Source to Upload CSV, changes
+    their mind, switches back to the SAME sample, and the columns never moved. Nothing was
+    replaced and nothing needed reconciling, so the lost X was pure deletion.
+
+    Contrast the DATASET switch pinned below, which also loses a selection and is not a bug:
+    there `cost` genuinely does not exist in the new frame, so the selectbox reconciles it. That
+    is the distinction the rule turns on — whether the value stopped being valid, or merely
+    stopped being rendered.
+    """
+    x_axis = next(sb for sb in app.selectbox if sb.label == "Category (X) axis")
+    x_axis.set_value("cost").run()
+    assert not app.exception
+
+    app.segmented_control[0].set_value("Upload CSV").run()
+    assert not app.exception
+    assert any("Upload a CSV" in info.value for info in app.info), (
+        "with no file chosen the app should ask for one and stop"
+    )
+
+    app.segmented_control[0].set_value("Sample dataset").run()
+    assert not app.exception
+    assert next(
+        sb for sb in app.selectbox if sb.label == "Category (X) axis"
+    ).value == ("cost"), (
+        "backing out of an upload that never happened discarded the X selection — the frame "
+        "never changed, so there was nothing to reconcile"
     )
 
 

@@ -426,6 +426,15 @@ with st.sidebar:
     else:
         uploaded = st.file_uploader("CSV file", type="csv")
         if uploaded is None:
+            # The gate's rule applied here too, and the argument for exempting this stop did not
+            # survive being measured. It read "the user is replacing the frame, so forgetting a
+            # column chosen against the old one is defensible" — but with NO file uploaded the
+            # frame is identical before and after, so nothing is replaced and nothing needs
+            # reconciling: backing out of an upload you never made silently forgot your X column.
+            # And it is safe when a file IS uploaded, because this preserves only the STORED
+            # value; a column the new frame does not have is still reset by the selectbox itself
+            # (which is what a Dataset switch already relies on).
+            keep_picker_state()
             st.info(
                 "Upload a CSV, or switch to a sample dataset.",
                 icon=":material/upload_file:",

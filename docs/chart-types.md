@@ -557,12 +557,21 @@ not waterfall's — and there is no second identity to print, since the lane nam
 category. Its tooltip uses `{point.name}`, which is waterfall's *fix* and xrange's **bug** in
 mirror image: `{point.category}` reads the X axis, and an xrange's categories are on the Y, so
 it renders the raw x value (a tooltip reading `1767571200000` — verified by rendering). That
-tooltip's span switches on the axis **kind** and not on the data's granularity, which timeline's
-review showed to be a live distinction: two same-day tasks (`09:30 → 17:45`, `18:00 → 19:00`) both
-come back `2026-01-12 → 2026-01-12`, the reading a zero-length **milestone** has — round-tripped,
-recorded and deliberately not fixed here, since the ends land on a ticked axis and this is a
-shipped type
-([the rule and the trade](decisions.md#tooltip-precision-when-a-channel-is-a-values-only-home)).
+tooltip's span now switches on the data's **granularity** as well as on the axis **kind**, which
+is timeline's rule applied one type over rather than a second decision: it used to switch on kind
+alone, so two same-day tasks (`09:30 → 17:45`, `18:00 → 19:00`) both came back
+`2026-01-12 → 2026-01-12` — the reading a zero-length **milestone** has, so the span did not
+merely lose the hours, it named a different kind of event. It was recorded as deferred for one
+release on the ground that the ends land on a ticked axis; that argument does not hold, because
+the axis is a second reading of the bar's *placement* (which was never wrong) and states the
+endpoints only to tick resolution. `_xrange_bars` therefore returns a **5-tuple**
+(`points, lanes, is_datetime, sub_day, problem`) and the span interpolates the same
+`_TOOLTIP_INSTANT` / `_TOOLTIP_DAY` pair timeline picks from — the constants renamed out of
+`_TIMELINE_*` for exactly this reason. Three cases, not two: a whole-day Gantt keeps
+`%Y-%m-%d` (unconditional widening is the failure in the other direction), a **numeric** axis
+prints bare coordinates and has no precision to pick at all, so `sub_day` is reported `False`
+there rather than as a plain number's meaningless remainder modulo a day
+([the rule, the retired deferral, and the trade](decisions.md#tooltip-precision-when-a-channel-is-a-values-only-home)).
 It needs **one** `_themed` hook, and it joins **column/bar** rather than waterfall — the other
 bar-shaped type, which needs the opposite treatment. That was *measured*, not inferred from the
 shared bar base class: waterfall is the standing proof the inference is unsound, its border
@@ -1190,13 +1199,20 @@ round-trip:
 | `tooltip.pointFormat` = `<b>{point.name}</b><br/>{point.x:%Y-%m-%d}` | quoted |
 | `dataLabels.format` = `{point.name}: {point.y}` | quoted — 2 pairs, 1 colon |
 | `dataLabels.format` = `{point.name}: {point.y:.1f}` | `format: {point.name}: {point.y:.1f}` — **unquoted** |
+| `tooltip.pointFormat` = `{point.x:%Y-%m-%d} → {point.x2:%Y-%m-%d}` (xrange's span, `<b>` stripped) | `pointFormat: {point.x:…} → {point.x2:…}` — **unquoted** |
 
 So this entry's own tooltip is safe **only because it opens with `<b>`**, not because tooltip keys
 are exempt — an edit that "simplifies" it by dropping the markup walks straight into the trap, and
 the markup is carrying more weight in the `%H:%M` precision than in the `%Y-%m-%d` one, since the
 widened format adds a second colon against the same two brace-pairs
 (`test_timeline_tooltip_keeps_the_time_when_the_data_carries_one` asserts the emitted JS quotes
-it, for exactly that reason), and
+it, for exactly that reason). **Xrange's span is in exactly the same position, not a worse one**,
+though it interpolates the pair twice: each added colon arrives inside an added brace-pair, so the
+margin is unchanged — day forms are one colon short in both types (2 pairs/1 colon for timeline's,
+3/2 for the span), and instant forms sit level in both (2/2, 3/3). Read the last table row
+narrowly: stripping the whole `<b>{point.name}</b><br/>` prefix removes the brace-pair that
+SUPPLIED the margin, so under that strip every form of both types goes bare, which says nothing
+about xrange in particular. And
 this file said for one release that `dataLabels`' and the tooltip's `format`/`pointFormat` were
 "quoted correctly", which cleared exactly the two values that break. The
 `{point.name}: {point.y}` that pie, funnel and pyramid all share is the narrowest escape in the
@@ -1259,8 +1275,10 @@ it as the output of a **format string** — which is exactly where granularity i
 should, nothing about `2026-01-12T09:30:00Z` fails a date sniff — and under a fixed `%Y-%m-%d` a
 deploy starting 09:30 and ending 17:45 drew two marks at two distinct coordinates whose tooltips
 both said `2026-01-12`. So `_timeline_events` returns a **3-tuple**, `(points, sub_day, problem)`
-(`_xrange_bars`' 4-tuple precedent), and the branch picks `_TIMELINE_INSTANT`
-(`%Y-%m-%d %H:%M`) or `_TIMELINE_DAY` (`%Y-%m-%d`) from it. Four things about that are
+(`_xrange_bars`' multi-value return the precedent, and now the same flag in a 5-tuple), and the
+branch picks `_TOOLTIP_INSTANT`
+(`%Y-%m-%d %H:%M`) or `_TOOLTIP_DAY` (`%Y-%m-%d`) from it — named for the **channel** rather than
+for this type, since xrange picks from the same pair. Four things about that are
 load-bearing. `sub_day` is **returned rather than derived by the caller**, because it is a
 column-level fact about the coerced values while the caller holds only the point dicts, whose
 `x` is typed `object`. It is `any(when % _MILLIS_PER_DAY ...)` — a date parses to exact midnight
@@ -1272,7 +1290,12 @@ per-point one**: `pointFormat` is one string per series, so a single timed row w
 tooltip in the chart (round-tripped), which is right — a column with an instant in it is a
 column whose readings are instants. Widening it unconditionally is the wrong trade the other
 way, and the milestone case is the commoner one: every tooltip would trail a meaningless
-` 00:00` that a reader cannot distinguish from a real midnight. The argument in full, and the
+` 00:00` that a reader cannot distinguish from a real midnight. Every one of those four now holds
+one type over as well: `xrange`'s span was the case the rule was written pointing at, deferred for
+one release and then closed on the same four answers, plus a third span CASE this shape has and a
+timeline cannot (a numeric axis, where there is no precision to pick, so the flag is reported
+`False` rather than as a plain number's remainder) — which is why the constants are named for the
+channel. The argument in full, the retired deferral, and the
 rule it generalizes to:
 [`decisions.md`](decisions.md#tooltip-precision-when-a-channel-is-a-values-only-home).
 
@@ -1971,7 +1994,11 @@ not merely the format string that used to hide the absurd number.
   the dropped dangling parent vs. the raised cycle, and the appended root), xrange's
   interval bars (the date-vs-number coordinate sniff and its two silent traps — a numeric
   column reaching a date parser, and an unnormalized epoch view — plus the kept milestone,
-  the dropped backwards bar, and the per-lane hue), columnrange's range bars (the `[low, high]`
+  the dropped backwards bar, the per-lane hue, and
+  `test_xrange_span_keeps_the_time_when_the_data_carries_one`, which pins all **three** span
+  forms — instant, day, bare-numeric — and asserts that the two timed bars really do sit at
+  distinct coordinates, since the defect it closes was a reading and never a placement),
+  columnrange's range bars (the `[low, high]`
   2-array that must NOT collapse; the null slot for a missing/non-finite end; the **kept**
   inverted range that is xrange's dropped backwards bar in mirror; the single hue and the
   `colorByPoint` that must appear nowhere; the low-required and low≠high guards and the x-in-y
@@ -2083,7 +2110,11 @@ not merely the format string that used to hide the absurd number.
   the two timed marks really do sit at distinct coordinates — the defect was a **reading**, never a
   placement, and a test that did not say so would leave the next reader repairing the wrong
   layer — and that the widened format still reaches the JS **quoted**, since it is one colon
-  nearer the unquoted-object trap than the day form.
+  nearer the unquoted-object trap than the day form. Its xrange sibling,
+  `test_xrange_span_keeps_the_time_when_the_data_carries_one`, is the same test with a third case
+  the timeline shape cannot have (a numeric axis, where there is no precision to pick), and the
+  pair is worth reading together: two types, one rule, one pair of constants — which is why those
+  constants are `_TOOLTIP_*` and no longer `_TIMELINE_*`.
   Beside them, `test_picker_columns_answers_both_pickers_from_one_sniff` pins the helper the two
   pickers now share: the pair it returns for a frame carrying one column of each kind, the two
   wrappers returning exactly its halves (so a caller wanting one list is not paying a different
@@ -2393,10 +2424,19 @@ current frame cannot satisfy silently forgot X: choose `cost`, switch to `timeli
 dataset, switch back to `line`, and it came back `month`. `keep_picker_state()` (naming the three
 keys in `_KEYED_PICKERS` — X, and the pills/multiselect pair that are the same control under two
 commands) re-assigns each stored entry to itself in front of the stop, the documented opt-out.
-That makes **three distinct ways a keyed picker loses its answer**, each with its own fix and its
-own test: re-minting by a label change (the key), filtering of a stale value by `pills`/
-`multiselect` (the reconciliation seed), and this one, garbage collection. The measurement, and
-the rule for the next early stop, are in
+That makes **three distinct ways a keyed picker loses its answer**, each with its own fix: re-minting
+by a label change (the key), filtering of a stale value by `pills`/`multiselect` (the reconciliation
+seed), and this one, garbage collection. Garbage collection is pinned **twice**, and not for
+re-minting's reason (which is two tests because there are two *pickers*): it is a property of the
+**stop**, so each early stop above the pickers needs its own. The no-CSV-uploaded
+`st.info(...)` + `st.stop()` further up the sidebar has the identical shape, was argued for one
+release as a defensible exception, and lost the argument to a measurement —
+with **no** file uploaded the frame is identical before and after, so backing out of an upload you
+never made deleted a selection nothing had invalidated
+(`test_app_backing_out_of_an_upload_does_not_forget_the_keyed_pickers`). Both stops now call
+`keep_picker_state()`, and they are the only two above the pickers. The rule that replaced the
+exception — a selection may be dropped when it stopped being **valid**, never when it merely
+stopped being **rendered** — and both measurements are in
 [`decisions.md`](decisions.md#keyed-widgets-the-third-way-a-picker-loses-its-answer).
 
 ## Appendix: the cross-cutting conventions in full
@@ -2501,6 +2541,17 @@ the rule for the next early stop, are in
   still covers the top of the range. (This copy had also drifted a step behind `CLAUDE.md`'s, which already ran
   to `tenth`: the sweep's own regex is prose about a count, and obeys the same rule as everything
   else here.)
+  One last shape, which this section had implicitly denied by naming itself after adding a type:
+  **closing an open case falsifies prose the same way adding a type does.** No type was added when
+  `xrange`'s span was made to follow its data's granularity, and the release notes carried
+  "that matters **here and nowhere else in the app**" — true when written, false the moment a
+  second type's tooltip became the only home for an instant at its own granularity. Note what
+  the neighbouring superlative did NOT do: "a timeline's tooltip is the only channel that states
+  the instant" is scoped by its own colon-list to a TIMELINE's channels, so it survived untouched.
+  The clause that went false was the one claiming a scope wider than the type — and neither
+  regex matches it, so it was found by reading the paragraph out from a hit rather than at one. The trigger is not the new *type*, it is the new *instance of a property*, which a
+  fix produces as readily as a feature does. Run both sweeps after closing a recorded case, not
+  only after adding a row to `SUPPORTED_TYPES`.
 - Render every visualization with Highcharts (`highcharts-core`); do not use
   native Streamlit charts.
 - Use `EnforcedNull` (from `highcharts_core.constants`) for missing data points
